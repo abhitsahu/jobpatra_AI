@@ -59,6 +59,18 @@ class InternalServerError(AppError):
         super().__init__(message=message, code="INTERNAL_ERROR", status_code=500)
 
 
+class UnparsableDocumentError(AppError):
+    """Raised when a document cannot be converted to plain text.
+
+    Examples:
+        - Scanned image PDF with no selectable text layer.
+        - Corrupt or password-protected DOCX file.
+    """
+
+    def __init__(self, message: str = "Document contains no extractable text.") -> None:
+        super().__init__(message=message, code="UNPARSABLE_DOCUMENT", status_code=422)
+
+
 # ---------------------------------------------------------------------------
 # Exception handlers — registered on the FastAPI app
 # ---------------------------------------------------------------------------
