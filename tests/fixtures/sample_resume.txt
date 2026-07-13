@@ -1,0 +1,43 @@
+JOHN   DOE
+Software   Engineer
+
+
+
+Skills
+
+React    Node.js    Docker
+
+
+
+Experience
+
+Senior Developer  at  Acme Corp   2021-2024
+
+   Built microservices using Node.js and Docker.
+   Led a team of 5 engineers.
+
+
+
+Education
+
+B.Sc   Computer Science
+State   University   2017-2021
+
+
+
+Projects
+
+E-Commerce Platform
+   Built using React and PostgreSQL.
+
+
+
+Certifications
+
+AWS  Certified  Developer
+
+
+
+Languages
+
+English   Spanish
