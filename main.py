@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.v1.ats import router as ats_router
 from app.api.v1.health import router as health_router
 from app.core.config import settings
 from app.core.errors import register_error_handlers
@@ -59,3 +60,4 @@ register_error_handlers(app)
 # ---------------------------------------------------------------------------
 
 app.include_router(health_router)
+app.include_router(ats_router)
