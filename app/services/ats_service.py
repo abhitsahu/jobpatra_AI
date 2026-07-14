@@ -43,6 +43,8 @@ from app.analysis.normalization.jd_normalizer import normalize as normalize_jd
 from app.analysis.parsers import parser_factory
 from app.analysis.scoring import scoring_engine
 from app.core.errors import ValidationError
+from app.core.logging import logger
+from app.middleware.request_id_middleware import get_request_id
 from app.schemas.ats import (
     ATSAnalyzeRequest,
     ATSAnalyzeResponse,
@@ -69,19 +71,27 @@ def analyze(request: ATSAnalyzeRequest) -> ATSAnalyzeResponse:
         ValidationError: If the resume input is neither text nor file.
         UnparsableDocumentError: If a file resume cannot be parsed to text.
     """
+    rid = get_request_id()
+    _log = lambda msg: logger.info("[%s] %s", rid[:8] if rid else "-", msg)  # noqa: E731
+
     start = time.perf_counter()
+    _log("ATS pipeline started")
 
     # ── Step 1: Parse resume → plain text ───────────────────────────────────
+    _log("Parsing resume")
     resume_raw = _parse_resume(request)
 
     # ── Step 2: Normalize texts ─────────────────────────────────────────────
+    _log("Normalizing text")
     resume_clean = text_cleaner.clean(resume_raw)
     jd_clean = normalize_jd(request.job_description.text)
 
     # ── Step 3: Split resume into sections ──────────────────────────────────
+    _log("Splitting sections")
     sections = section_splitter.split(resume_clean)
 
     # ── Step 4: Extract from resume ─────────────────────────────────────────
+    _log("Extracting resume data")
     resume_keywords = keyword_extractor.extract(resume_clean)
     resume_skills_result = skill_extractor.extract(resume_clean)
     resume_skills = [m.canonical for m in resume_skills_result.skills]
@@ -93,17 +103,20 @@ def analyze(request: ATSAnalyzeRequest) -> ATSAnalyzeResponse:
     education_result: EducationExtractionResult = education_extractor.extract(edu_text)
 
     # ── Step 5: Extract from JD ─────────────────────────────────────────────
+    _log("Extracting JD data")
     jd_keywords = keyword_extractor.extract(jd_clean)
     jd_skills_result = skill_extractor.extract(jd_clean)
     required_skills = [m.canonical for m in jd_skills_result.skills]
 
     # ── Step 6: Keyword matching (deterministic — no semantic provider) ──────
+    _log("Matching keywords")
     match_result = keyword_matcher.match(
         resume_keywords=resume_keywords,
         jd_keywords=jd_keywords,
     )
 
     # ── Step 7: Score ────────────────────────────────────────────────────────
+    _log("Calculating scores")
     report = scoring_engine.score(
         match_result=match_result,
         experience_entries=experience_entries,
@@ -114,6 +127,7 @@ def analyze(request: ATSAnalyzeRequest) -> ATSAnalyzeResponse:
     )
 
     elapsed_ms = (time.perf_counter() - start) * 1000.0
+    _log(f"ATS pipeline completed in {elapsed_ms:.1f}ms — overall score: {report.overall_score}")
 
     # ── Step 8: Build response ───────────────────────────────────────────────
     return _build_response(

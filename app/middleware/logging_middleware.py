@@ -23,6 +23,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         start = time.perf_counter()
         method = request.method
         path = request.url.path
+        caller = request.headers.get("X-Service-Name", "-")
 
         response = await call_next(request)
 
@@ -30,8 +31,9 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         rid = get_request_id()
 
         logger.info(
-            "[%s] %s %s → %s (%.1fms)",
+            "[%s] [%s] %s %s → %s (%.1fms)",
             rid[:8] if rid else "-",
+            caller,
             method,
             path,
             response.status_code,
