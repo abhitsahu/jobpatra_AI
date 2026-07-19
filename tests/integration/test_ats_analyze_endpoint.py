@@ -167,7 +167,7 @@ class TestAnalyzeTextMode:
         self, client: httpx.AsyncClient, text_payload: dict
     ) -> None:
         body = (await client.post(_ENDPOINT, json=text_payload, headers=_AUTH_HEADERS)).json()
-        assert body.get("version") == "1.0"
+        assert body.get("version") == "1.2"
 
     async def test_deterministic_same_input_same_output(
         self, client: httpx.AsyncClient, text_payload: dict

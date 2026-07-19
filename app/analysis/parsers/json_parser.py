@@ -1,46 +1,44 @@
-"""DOCX document parser.
+"""JSON document parser.
 
-Converts DOCX bytes into a single plain-text string using LangChain's Docx2txtLoader.
-This module has ONE responsibility: extract text from DOCX bytes.
-
-It does NOT normalize, score, analyse, or classify the extracted text.
+Converts JSON bytes into a single plain-text string using LangChain's JSONLoader.
+This module has ONE responsibility: extract text from JSON bytes.
 """
 
 import os
 import tempfile
-from langchain_community.document_loaders import Docx2txtLoader
+from langchain_community.document_loaders import JSONLoader
 
 from app.core.errors import UnparsableDocumentError
 
 
-def parse(docx_bytes: bytes) -> str:
-    """Extract plain text from DOCX bytes using LangChain's Docx2txtLoader.
+def parse(json_bytes: bytes) -> str:
+    """Extract plain text from JSON bytes using LangChain's JSONLoader.
 
     Args:
-        docx_bytes: Raw bytes of a DOCX file.
+        json_bytes: Raw bytes of a JSON file.
 
     Returns:
-        A single plain-text string with the full content of the DOCX.
+        A single plain-text string with the full content of the JSON.
 
     Raises:
         UnparsableDocumentError: If the document cannot be parsed or contains no text.
     """
-    temp_dir = os.path.join(os.getcwd(), ".temp_docx_parser")
+    temp_dir = os.path.join(os.getcwd(), ".temp_json_parser")
     os.makedirs(temp_dir, exist_ok=True)
 
-    temp_file = tempfile.NamedTemporaryFile(dir=temp_dir, suffix=".docx", delete=False)
+    temp_file = tempfile.NamedTemporaryFile(dir=temp_dir, suffix=".json", delete=False)
     temp_path = temp_file.name
 
     try:
-        temp_file.write(docx_bytes)
+        temp_file.write(json_bytes)
         temp_file.close()
 
         try:
-            loader = Docx2txtLoader(temp_path)
+            loader = JSONLoader(temp_path, jq_schema=".", text_content=False)
             documents = loader.load()
         except Exception as exc:
             raise UnparsableDocumentError(
-                f"Could not open/parse DOCX: {exc}"
+                f"Could not open/parse JSON: {exc}"
             ) from exc
 
         pages: list[str] = []
@@ -50,7 +48,7 @@ def parse(docx_bytes: bytes) -> str:
                 pages.append(stripped)
 
         if not pages:
-            raise UnparsableDocumentError("DOCX contains no extractable text.")
+            raise UnparsableDocumentError("JSON contains no extractable text.")
 
         return "\n\n".join(pages)
 

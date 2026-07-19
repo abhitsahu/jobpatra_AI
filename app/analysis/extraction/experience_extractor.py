@@ -3,31 +3,11 @@
 This module has ONE responsibility: given the raw text of a resume's
 Experience section (as produced by section_splitter), extract structured
 work experience entries.
-
-It does NOT:
-  - score experience relevance
-  - compare against a job description
-  - call AI or external services
-  - import from FastAPI
-
-Algorithm:
-  A new experience entry is identified when a line contains a date range AND
-  looks like a header (not a bullet).  Subsequent non-blank lines belonging to
-  that entry are collected as bullet points.  A new header line triggers the
-  flush of the current entry.
-
-Limitations (by design):
-  - Heuristic parsing.  Unusual formatting may not be fully parsed.
-  - Duration is computed only when both start and end dates are parseable year
-    values.
-  - Missing fields are None, never exceptions.
-
-All functions are pure. No I/O. No state. No FastAPI imports.
 """
 
 import re
+import datetime
 from dataclasses import dataclass, field
-
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -89,7 +69,17 @@ _METRIC_RE = re.compile(
     re.IGNORECASE,
 )
 
-_BLANK_LINE_RE = re.compile(r"^\s*$")
+# Company indicators
+_COMPANY_INDICATORS_RE = re.compile(
+    r'\b(corp|corporation|inc|incorporated|llc|ltd|limited|co|company|group|solutions|technologies|systems|labs)\b',
+    re.IGNORECASE
+)
+
+# Common Job Title keywords
+_JOB_TITLE_KEYWORDS_RE = re.compile(
+    r'\b(engineer|developer|designer|architect|manager|director|lead|specialist|analyst|consultant|intern|programmer|officer|administrator|writer|expert|practitioner|head|president|vice president|vp|executive|lead|senior|junior|staff|principal|associate)\b',
+    re.IGNORECASE
+)
 
 
 # ---------------------------------------------------------------------------
@@ -98,21 +88,7 @@ _BLANK_LINE_RE = re.compile(r"^\s*$")
 
 
 def extract(experience_text: str) -> list[ExperienceEntry]:
-    """Parse work experience entries from the experience section text.
-
-    Uses a line-by-line state machine: a line that contains a date range
-    and is not a bullet is treated as a new entry header.  All following
-    lines (including those separated by blank lines within the same entry)
-    are collected as body lines until the next header is encountered.
-
-    Args:
-        experience_text: Text content of the Experience section, as returned
-            by ``section_splitter.split().experience``.
-
-    Returns:
-        List of ``ExperienceEntry`` objects.  Returns an empty list if the
-        text is empty.  Never raises.
-    """
+    """Parse work experience entries from the experience section text."""
     if not experience_text or not experience_text.strip():
         return []
 
@@ -123,7 +99,6 @@ def extract(experience_text: str) -> list[ExperienceEntry]:
     for line in experience_text.splitlines():
         stripped = line.strip()
 
-        # Blank line — keep collecting for the current entry
         if not stripped:
             continue
 
@@ -138,7 +113,6 @@ def extract(experience_text: str) -> list[ExperienceEntry]:
             current = _parse_header(stripped)
             body_lines = []
         else:
-            # Accumulate as a body line for the current entry
             body_lines.append(stripped)
 
     # Flush the last entry
@@ -146,7 +120,7 @@ def extract(experience_text: str) -> list[ExperienceEntry]:
         _finalise_entry(current, body_lines)
         entries.append(current)
     elif body_lines:
-        # Text with no date headers at all — treat the whole thing as one entry
+        # Fallback: treat all bullet points as responsibilities of a single entry if no date is found
         entry = ExperienceEntry()
         _finalise_entry(entry, body_lines)
         if entry.bullets:
@@ -161,14 +135,7 @@ def extract(experience_text: str) -> list[ExperienceEntry]:
 
 
 def _parse_header(line: str) -> ExperienceEntry:
-    """Extract title, company, and dates from a header line.
-
-    Args:
-        line: A stripped header line containing a date range.
-
-    Returns:
-        Partially populated ``ExperienceEntry`` (no bullets/metrics yet).
-    """
+    """Extract title, company, and dates from a header line using robust heuristics."""
     entry = ExperienceEntry()
 
     date_match = _DATE_RANGE_RE.search(line)
@@ -177,27 +144,59 @@ def _parse_header(line: str) -> ExperienceEntry:
         end_raw = date_match.group(4)
         entry.end_date = "Present" if end_raw.lower() in ("present", "current") else end_raw
         entry.duration_years = _compute_duration(entry.start_date, entry.end_date)
-        # Remove date range from the header text to isolate title/company
         header_text = _DATE_RANGE_RE.sub("", line).strip(" ,.-–—")
     else:
         header_text = line
 
+    # Step 1: Split using primary separators
     parts = _AT_SEP_RE.split(header_text, maxsplit=1)
-    entry.title = parts[0].strip() or None
-    entry.company = parts[1].strip() if len(parts) > 1 else None
+    if len(parts) > 1:
+        entry.title = parts[0].strip() or None
+        entry.company = parts[1].strip() or None
+    else:
+        # Step 2: Fallback to company suffix/indicator heuristic
+        company_match = _COMPANY_INDICATORS_RE.search(header_text)
+        if company_match:
+            end_idx = company_match.end()
+            words = header_text[:end_idx].split()
+            title_words = []
+            company_words = []
+            in_company = True
+            for word in reversed(words):
+                if in_company:
+                    company_words.insert(0, word)
+                    if _JOB_TITLE_KEYWORDS_RE.match(word) and word.lower() not in (
+                        "systems", "group", "solutions", "labs", "company", "technologies"
+                    ):
+                        in_company = False
+                        title_words.insert(0, company_words.pop(0))
+                else:
+                    title_words.insert(0, word)
+            
+            if company_words:
+                entry.company = " ".join(company_words).strip(" ,.-")
+                entry.title = " ".join(title_words).strip(" ,.-")
+            else:
+                entry.title = header_text.strip()
+        else:
+            # Step 3: Split by comma
+            comma_parts = header_text.split(",", 1)
+            if len(comma_parts) > 1:
+                entry.title = comma_parts[0].strip()
+                entry.company = comma_parts[1].strip()
+            else:
+                entry.title = header_text.strip()
+
+    if entry.title:
+        entry.title = entry.title.strip(" ,.-")
+    if entry.company:
+        entry.company = entry.company.strip(" ,.-")
 
     return entry
 
 
 def _finalise_entry(entry: ExperienceEntry, body_lines: list[str]) -> None:
-    """Populate bullets and metrics on ``entry`` from ``body_lines``.
-
-    Modifies ``entry`` in place.
-
-    Args:
-        entry: The ExperienceEntry being built.
-        body_lines: Lines collected after the header.
-    """
+    """Populate bullets and metrics on ``entry`` from ``body_lines``."""
     for raw in body_lines:
         clean = _BULLET_RE.sub("", raw).strip()
         if clean:
@@ -207,19 +206,10 @@ def _finalise_entry(entry: ExperienceEntry, body_lines: list[str]) -> None:
 
 
 def _compute_duration(start: str | None, end: str | None) -> float | None:
-    """Compute duration in years between two year strings.
-
-    Args:
-        start: Start year string, e.g. ``'2021'``.
-        end: End year string, e.g. ``'2024'`` or ``'Present'``.
-
-    Returns:
-        Float years, or ``None`` if either value is non-numeric.
-    """
+    """Compute duration in years between two year strings."""
     if start is None or end is None:
         return None
     if end.lower() in ("present", "current"):
-        import datetime
         end_year = datetime.datetime.now().year
     else:
         year_match = _YEAR_RE.search(end)

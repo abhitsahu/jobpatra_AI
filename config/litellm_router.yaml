@@ -1,0 +1,43 @@
+# config/litellm_router.yaml
+# LiteLLM router configuration for JobPatra AI
+
+# Global settings for the router
+routing_strategy: "simple-shuffle"
+num_retries: 2
+timeout: 10.0
+
+# Cooldown settings for health-aware routing
+cooldown_time: 30 # Seconds to disable a failing model deployment
+max_failures: 3 # Number of consecutive failures before marking unhealthy
+
+# Supported deployments
+model_list:
+  - model_name: "gemini-3.5-flash"
+    litellm_params:
+      model: "gemini/gemini-3.5-flash"
+      api_key: "os.environ/GOOGLE_API_KEY"
+      rpm: 15
+      timeout: 10.0
+      order: 1
+  - model_name: "gemini-3.1-flash-lite"
+    litellm_params:
+      model: "gemini/gemini-3.1-flash-lite"
+      api_key: "os.environ/GOOGLE_API_KEY"
+      rpm: 30
+      timeout: 10.0
+      order: 2
+  - model_name: "llama-3.1-8b-instant"
+    litellm_params:
+      model: "groq/llama-3.1-8b-instant"
+      api_key: "os.environ/GROQ_API_KEY"
+      rpm: 30
+      timeout: 10.0
+      order: 3
+
+# Fallback definitions
+fallbacks:
+  - "gemini-3.5-flash": ["gemini-3.1-flash-lite", "llama-3.1-8b-instant"]
+  - "gemini-3.1-flash-lite": ["llama-3.1-8b-instant"]
+
+# Default model alias used by the application
+default_model_alias: "gemini-3.5-flash"

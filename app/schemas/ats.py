@@ -11,7 +11,10 @@ Does NOT contain:
 
 from __future__ import annotations
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
+from typing import Literal, Any
+
+from app.schemas.ai import ATSExplanation
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +47,18 @@ class ResumeInput(BaseModel):
         """Reject explicitly empty strings; None is acceptable (means file mode)."""
         if v is not None and not v.strip():
             raise ValueError("text must not be blank.")
+        return v
+
+    @field_validator("file_bytes", mode="before")
+    @classmethod
+    def decode_base64_file_bytes(cls, v: Any) -> Any:
+        """Decode base64 string value to raw bytes."""
+        if isinstance(v, str):
+            import base64
+            try:
+                return base64.b64decode(v)
+            except Exception as e:
+                raise ValueError(f"Invalid base64 encoding: {e}")
         return v
 
     def is_file_mode(self) -> bool:
@@ -89,6 +104,8 @@ class ATSAnalyzeRequest(BaseModel):
     """Resume — raw text or file bytes."""
     job_description: JobDescriptionInput
     """Job description — always raw text."""
+    stream: bool = False
+    """Whether to stream progress events via Server-Sent Events (SSE)."""
 
     @field_validator("resume")
     @classmethod
@@ -136,14 +153,12 @@ class ATSAnalyzeResponse(BaseModel):
     """Response body for POST /v1/ats/analyze.
 
     Contains the full deterministic ATS report — scores, matched/missing
-    keywords, skill coverage, and extracted resume metadata.
+    keywords, skill coverage, and extracted resume metadata — plus an
+    optional AI-generated explanation produced by the LangChain chain.
 
-    Does NOT contain:
-      - AI suggestions
-      - Resume rewrites
-      - Cover letter content
-      - Interview questions
-      - Explanations (those belong to a future AI phase)
+    The deterministic scores are ALWAYS present.
+    ``ai_explanation`` is populated only when the AI layer succeeds.
+    ``ai_status`` is always present — "ok" or "unavailable".
     """
 
     # ── Scores ────────────────────────────────────────────────────────────
@@ -183,5 +198,24 @@ class ATSAnalyzeResponse(BaseModel):
     # ── Meta ───────────────────────────────────────────────────────────────
     processing_time_ms: float
     """Wall-clock time for the full pipeline in milliseconds."""
-    version: str = "1.0"
+    version: str = "1.2"
     """API response schema version."""
+
+    # ── AI explanation (Phase 10.1 — optional) ─────────────────────────────
+    ai_status: Literal["ok", "unavailable"] = Field(
+        default="unavailable",
+        description=(
+            "'ok' when the AI layer produced a valid explanation. "
+            "'unavailable' when the AI layer was skipped, failed, or degraded."
+        ),
+    )
+    """AI availability status for this response."""
+
+    ai_explanation: ATSExplanation | None = Field(
+        default=None,
+        description=(
+            "AI-generated explanation of the ATS scores. "
+            "Null when the AI service is unavailable or not configured."
+        ),
+    )
+    """Structured AI explanation — strengths, weaknesses, per-section breakdown."""

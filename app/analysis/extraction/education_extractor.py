@@ -3,30 +3,10 @@
 This module has ONE responsibility: given the raw text of a resume's
 Education section (as produced by section_splitter), extract structured
 education and certification entries.
-
-It does NOT:
-  - score or rank education
-  - compare against job requirements
-  - call AI or external services
-  - import from FastAPI
-
-Algorithm:
-  Degree detection uses a vocabulary of known degree abbreviations and
-  keywords (e.g., "B.Sc", "Bachelor", "M.Tech", "PhD").  Field of study
-  is inferred from the remainder of the degree line.  Institution is
-  identified from lines that contain university/college/institute keywords.
-  Graduation year is the first four-digit year found in the block.
-
-Limitations (by design):
-  - Heuristic. Unusual degree formats may not be detected.
-  - Fields missing from the text are None, never exceptions.
-
-All functions are pure. No I/O. No state. No FastAPI imports.
 """
 
 import re
 from dataclasses import dataclass, field
-
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -45,6 +25,8 @@ class EducationEntry:
     """University or college name."""
     graduation_year: str | None = None
     """Graduation year as a string, e.g. ``'2021'``."""
+    cgpa: str | None = None
+    """Extracted GPA or CGPA score, e.g. ``'3.8'`` or ``'9.2'``."""
 
 
 @dataclass
@@ -98,6 +80,12 @@ _CERT_KEYWORDS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Regular expression to extract GPA / CGPA / Grade percentages
+_CGPA_RE = re.compile(
+    r'\b(?:gpa|cgpa|grade|score|percentage|pct)?\s*:?\s*(\b[0-9]\.[0-9]{1,2}(?:\s*/\s*(?:4|5|10))?\b|\b10\.0\b|\b[789]\.[0-9]\b|\b[89]\d%\b)\b',
+    re.IGNORECASE
+)
+
 _BLANK_LINE_RE = re.compile(r"^\s*$")
 
 # Separator between degree and field: "in", "of", dash, comma
@@ -112,17 +100,7 @@ _DEGREE_FIELD_SEP_RE = re.compile(
 
 
 def extract(education_text: str) -> EducationExtractionResult:
-    """Parse education entries and certifications from the education section.
-
-    Args:
-        education_text: Text of the Education section from
-            ``section_splitter.split().education``, or any text block
-            containing education information.
-
-    Returns:
-        ``EducationExtractionResult`` with entries and certifications lists.
-        Returns empty lists if the text is empty.  Never raises.
-    """
+    """Parse education entries and certifications from the education section."""
     if not education_text or not education_text.strip():
         return EducationExtractionResult()
 
@@ -162,16 +140,7 @@ def _split_into_blocks(text: str) -> list[list[str]]:
 
 
 def _parse_block(lines: list[str]) -> EducationEntry | str | None:
-    """Parse a block of lines as either an education entry, a certification, or None.
-
-    Args:
-        lines: Non-blank lines from one education block.
-
-    Returns:
-        - ``EducationEntry`` if a degree-like pattern is found.
-        - ``str`` (certification name) if a cert keyword is found but no degree.
-        - ``None`` if the block contains no recognizable information.
-    """
+    """Parse a block of lines as either an education entry, a certification, or None."""
     combined = " ".join(line.strip() for line in lines)
     degree_match = _DEGREE_RE.search(combined)
 
@@ -190,16 +159,7 @@ def _build_education_entry(
     combined: str,
     degree_match: re.Match[str],
 ) -> EducationEntry:
-    """Build an EducationEntry from matched lines.
-
-    Args:
-        lines: Original text lines of the block.
-        combined: All lines joined into one string.
-        degree_match: Regex match object for the degree keyword.
-
-    Returns:
-        Populated ``EducationEntry``.
-    """
+    """Build an EducationEntry from matched lines."""
     entry = EducationEntry()
 
     # Degree: the matched keyword
@@ -210,19 +170,17 @@ def _build_education_entry(
         (l.strip() for l in lines if _DEGREE_RE.search(l)), combined
     )
     after_degree = degree_line[degree_match.start() + len(entry.degree):].strip()
-    # Remove leading separators
     after_degree = _DEGREE_FIELD_SEP_RE.sub("", after_degree, count=1).strip()
-    # Take up to the first comma or year
     field_text = _YEAR_RE.sub("", after_degree).strip(" ,.-")
-    # Remove institution name from field if present
     field_text = _INSTITUTION_RE.sub("", field_text).strip(" ,.-")
     entry.field = field_text if field_text else None
 
     # Institution: line containing a university/college keyword
     for line in lines:
         if _INSTITUTION_RE.search(line):
-            # Remove year from institution name
             inst = _YEAR_RE.sub("", line).strip(" ,.-")
+            # Filter CGPA remnants if they are present in institution line
+            inst = _CGPA_RE.sub("", inst).strip(" ,.-")
             entry.institution = inst if inst else None
             break
 
@@ -230,5 +188,10 @@ def _build_education_entry(
     year_match = _YEAR_RE.search(combined)
     if year_match:
         entry.graduation_year = year_match.group()
+
+    # CGPA/GPA extraction
+    cgpa_match = _CGPA_RE.search(combined)
+    if cgpa_match:
+        entry.cgpa = cgpa_match.group(1).strip()
 
     return entry

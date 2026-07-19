@@ -6,10 +6,21 @@ All callers go through parse() in this module.
 Supported inputs:
     - PDF  (.pdf)
     - DOCX (.docx)
+    - TXT  (.txt)
+    - CSV  (.csv)
+    - Excel (.xlsx, .xls)
+    - JSON (.json)
     - Raw text (no filename / no bytes)
 """
 
-from app.analysis.parsers import docx_parser, pdf_parser
+from app.analysis.parsers import (
+    docx_parser,
+    pdf_parser,
+    txt_parser,
+    csv_parser,
+    xlsx_parser,
+    json_parser
+)
 from app.core.errors import ValidationError
 
 
@@ -17,6 +28,11 @@ from app.core.errors import ValidationError
 _EXTENSION_MAP = {
     ".pdf": pdf_parser,
     ".docx": docx_parser,
+    ".txt": txt_parser,
+    ".csv": csv_parser,
+    ".xlsx": xlsx_parser,
+    ".xls": xlsx_parser,
+    ".json": json_parser,
 }
 
 

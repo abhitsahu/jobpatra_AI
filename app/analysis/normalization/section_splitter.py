@@ -3,32 +3,11 @@
 This module has ONE responsibility: use heuristic heading detection to split
 a cleaned resume into its logical sections (Summary, Experience, Education,
 Skills, etc.) and return a typed, structured result.
-
-Limitations (by design):
-  - Detection is heuristic. A heading is recognized by matching it against a
-    dictionary of known section names. Exotic or highly personalized headings
-    may not be detected.
-  - If a section is absent from the resume the corresponding field is ``None``.
-    Missing sections NEVER raise an exception.
-  - The quality and completeness of the split depends directly on how well the
-    text was cleaned before being passed here. Always run text_cleaner.clean()
-    first.
-  - Content between the last detected heading and end-of-document is assigned
-    to that final section.
-
-This module does NOT:
-  - extract keywords, skills, or entities from section content
-  - judge resume quality
-  - calculate ATS scores
-  - call any external service or AI
-
-All functions are pure: same input always produces the same output.
-No I/O. No file access. No FastAPI imports.
 """
 
 import re
 from dataclasses import dataclass, field
-
+from rapidfuzz import fuzz
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -40,8 +19,7 @@ class ResumeSection:
     """Structured representation of a resume's named sections.
 
     Each field holds the raw text body of that section, or ``None`` if the
-    section was not found in the resume.  No extraction or analysis is
-    performed on the content — that belongs to later phases.
+    section was not found in the resume.
     """
 
     summary: str | None = field(default=None)
@@ -59,8 +37,6 @@ class ResumeSection:
 # Heading vocabulary
 # ---------------------------------------------------------------------------
 
-# Each key is the canonical field name on ResumeSection.
-# Values are all recognized heading aliases for that section.
 _HEADING_MAP: dict[str, tuple[str, ...]] = {
     "summary": (
         "summary",
@@ -118,47 +94,47 @@ _HEADING_MAP: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Flat list of all aliases for sorting and regex creation
+_ALL_ALIASES = sorted(
+    (alias for aliases in _HEADING_MAP.values() for alias in aliases),
+    key=len,
+    reverse=True,
+)
 
-def _build_heading_pattern() -> re.Pattern[str]:
-    """Compile a regex that matches any known section heading on its own line.
 
-    A heading line is defined as a line whose stripped, lowercased content
-    exactly matches one of the aliases in ``_HEADING_MAP``.  The pattern
-    is case-insensitive and anchored to the start/end of each line.
+def _match_heading(line: str) -> str | None:
+    """Return the canonical section key if ``line`` is a known heading, else None.
+
+    First tries an exact match on cleaned lowercase text, and falls back to
+    fuzzy matching via rapidfuzz.
     """
-    all_aliases = sorted(
-        (alias for aliases in _HEADING_MAP.values() for alias in aliases),
-        key=len,
-        reverse=True,  # longer aliases first to avoid partial matches
-    )
-    escaped = [re.escape(a) for a in all_aliases]
-    pattern = r"^(?:" + "|".join(escaped) + r")\s*$"
-    return re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+    stripped = line.strip()
+    if not stripped or len(stripped) > 40:
+        return None
 
+    # Clean punctuation and trailing separators commonly found in headings
+    lower = stripped.lower().rstrip(':.- ')
 
-_HEADING_RE: re.Pattern[str] = _build_heading_pattern()
+    # Fast path: exact match
+    for canonical, aliases in _HEADING_MAP.items():
+        if lower in aliases:
+            return canonical
 
+    # Fuzzy match fallback using rapidfuzz ratio
+    for canonical, aliases in _HEADING_MAP.items():
+        for alias in aliases:
+            if fuzz.ratio(lower, alias) >= 88.0:
+                return canonical
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+    return None
+
 
 
 def split(text: str) -> ResumeSection:
-    """Split cleaned resume text into named sections.
+    """Split cleaned resume text into named sections for compatibility.
 
-    Scans the text line by line for recognized section headings.  Text
-    between two consecutive headings is assigned to the first heading's
-    section.  Any text before the first detected heading is stored in
-    ``ResumeSection.other``.
-
-    Args:
-        text: Cleaned resume text (output of ``text_cleaner.clean()``).
-
-    Returns:
-        A ``ResumeSection`` dataclass with each recognized section populated.
-        Unrecognized or absent sections are ``None``.  This function never
-        raises.
+    Uses _match_heading to split text. Any text before the first detected
+    heading is placed under 'other' to satisfy compatibility constraints.
     """
     sections: dict[str, str] = {}
     current_key: str | None = None
@@ -167,14 +143,12 @@ def split(text: str) -> ResumeSection:
     for line in text.splitlines():
         canonical = _match_heading(line)
         if canonical is not None:
-            # Flush buffer into previous section
             _flush(sections, current_key, buffer)
             buffer = []
             current_key = canonical
         else:
             buffer.append(line)
 
-    # Flush final section
     _flush(sections, current_key, buffer)
 
     return ResumeSection(
@@ -194,44 +168,12 @@ def split(text: str) -> ResumeSection:
 # ---------------------------------------------------------------------------
 
 
-def _match_heading(line: str) -> str | None:
-    """Return the canonical section key if ``line`` is a known heading, else None.
-
-    Args:
-        line: A single line of text.
-
-    Returns:
-        Canonical key (e.g. ``"experience"``) or ``None``.
-    """
-    stripped = line.strip()
-    if not stripped:
-        return None
-
-    if not _HEADING_RE.fullmatch(stripped):
-        return None
-
-    lower = stripped.lower()
-    for canonical, aliases in _HEADING_MAP.items():
-        if lower in aliases:
-            return canonical
-    return None
-
-
 def _flush(
     sections: dict[str, str],
     key: str | None,
     buffer: list[str],
 ) -> None:
-    """Write the accumulated buffer into ``sections`` under ``key``.
-
-    Strips leading/trailing blank lines from the buffered content.
-    If the buffer is empty after stripping, nothing is written.
-
-    Args:
-        sections: Mutable dict of already-collected sections.
-        key: The section key to write to (``None`` means pre-heading text).
-        buffer: Lines accumulated since the last heading.
-    """
+    """Write the accumulated buffer into ``sections`` under ``key``."""
     content = "\n".join(buffer).strip()
     if content:
         sections[key] = content  # type: ignore[index]

@@ -71,6 +71,54 @@ class UnparsableDocumentError(AppError):
         super().__init__(message=message, code="UNPARSABLE_DOCUMENT", status_code=422)
 
 
+class InvalidInputError(AppError):
+    """Raised by AI input guardrails before any LLM call is made.
+
+    Use cases:
+        - Resume or JD text exceeds the configured size limit.
+        - Input is empty or blank.
+        - Basic prompt injection pattern detected.
+
+    The LLM is NEVER called when this error is raised.
+    The HTTP response is 422 Unprocessable Entity.
+    """
+
+    def __init__(
+        self,
+        message: str = "Input validation failed.",
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(message=message, code="INVALID_INPUT", status_code=422)
+        self.metadata: dict[str, object] = metadata or {}
+
+
+class AIGenerationError(Exception):
+    """Raised when the AI layer fails to produce a valid structured response.
+
+    This is NOT an ``AppError`` — it must NOT propagate through the FastAPI
+    exception handler.  It is caught inside ``ats_service.analyze()`` and
+    converted into ``ai_status="unavailable"`` while the deterministic ATS
+    report is still returned with HTTP 200.
+
+    Use cases:
+        - Output guardrail validation fails after one retry.
+        - LLM returns malformed JSON that cannot be parsed into ``ATSExplanation``.
+
+    This error NEVER causes the endpoint to fail.
+    """
+
+    def __init__(
+        self,
+        message: str = "AI generation failed.",
+        code: str = "AI_GENERATION_ERROR",
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        self.message = message
+        self.code = code
+        self.metadata: dict[str, object] = metadata or {}
+        super().__init__(message)
+
+
 # ---------------------------------------------------------------------------
 # Exception handlers — registered on the FastAPI app
 # ---------------------------------------------------------------------------
