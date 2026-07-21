@@ -1,12 +1,11 @@
-"""Unit tests for the explain-score chain (Phase 10.1).
+"""Unit tests for the explain-score chain.
 
 Strategy
 --------
-* No real LLM calls — the model is replaced with a ``FakeChatModel``
-  that returns a hard-coded JSON string matching ``ATSExplanation``.
+* No real LLM calls — the model is replaced with a mock through ``invoke_with_tracing``.
 * Validates that ``build_chain_inputs()`` populates every prompt variable.
 * Validates that the chain parses LLM JSON output into ``ATSExplanation``.
-* Validates that ``run_explain_score`` works end-to-end with the fake model.
+* Validates that ``run_explain_score`` works end-to-end with the mock.
 """
 
 from __future__ import annotations
@@ -131,66 +130,71 @@ class TestBuildChainInputs:
 # run_explain_score — mock the LLM
 # ---------------------------------------------------------------------------
 
-_FAKE_EXPLANATION = ATSExplanation(
-    strengths=["Strong Python skills matched the JD."],
-    weaknesses=["Missing Kubernetes experience."],
-    section_explanations=[
-        SectionExplanation(
-            section="Keywords",
-            score=55.0,
-            explanation="Resume matched 2 of 5 required keywords.",
-        )
+_FAKE_EXPLANATION_DICT = {
+    "strengths": ["Strong Python skills matched the JD."],
+    "weaknesses": ["Missing Kubernetes experience."],
+    "section_explanations": [
+        {
+            "section": "Keywords",
+            "score": 55.0,
+            "explanation": "Resume matched 2 of 5 required keywords.",
+        }
     ],
-    suggestions=["Add Kubernetes to your skills section."],
-    summary="The resume scored 62.5/100 overall against the job description.",
-    recommendations=[
-        RecommendationSchema(
-            priority="High",
-            issue="Missing professional summary.",
-            why="A summary hooks the recruiter.",
-            copy_paste_content="Motivated engineer.",
-            placement="Top of resume.",
-            ats_impact="+10 points"
-        )
+    "suggestions": ["Add Kubernetes to your skills section."],
+    "summary": "The resume scored 62.5/100 overall against the job description.",
+    "recommendations": [
+        {
+            "priority": "High",
+            "issue": "Missing professional summary.",
+            "why": "A summary hooks the recruiter.",
+            "copy_paste_content": "Motivated engineer.",
+            "placement": "Top of resume.",
+            "ats_impact": "+10 points"
+        }
     ],
-)
+}
 
 
 class TestRunExplainScore:
-    @patch("app.ai.chains.explain_score_chain.run_with_retry")
+    @patch("app.ai.chains.explain_score_chain.invoke_with_tracing")
     def test_returns_ats_explanation_when_chain_succeeds(
-        self, mock_run_with_retry, sample_response: ATSAnalyzeResponse
+        self, mock_invoke, sample_response: ATSAnalyzeResponse
     ) -> None:
         """When the chain returns ATSExplanation, run_explain_score returns it."""
-        mock_run_with_retry.return_value = _FAKE_EXPLANATION
+        mock_msg = MagicMock()
+        mock_msg.content = json.dumps(_FAKE_EXPLANATION_DICT)
+        mock_invoke.return_value = mock_msg
         mock_llm = MagicMock()
 
         with patch("app.ai.chains.explain_score_chain.get_chat_model", return_value=mock_llm):
             result = run_explain_score(sample_response, _SAMPLE_JD)
 
-        assert result is _FAKE_EXPLANATION
-        mock_run_with_retry.assert_called_once()
+        assert isinstance(result, ATSExplanation)
+        assert result.summary == _FAKE_EXPLANATION_DICT["summary"]
+        mock_invoke.assert_called_once()
 
-    @patch("app.ai.chains.explain_score_chain.run_with_retry")
+    @patch("app.ai.chains.explain_score_chain.invoke_with_tracing")
     def test_chain_invoked_with_correct_input_keys(
-        self, mock_run_with_retry, sample_response: ATSAnalyzeResponse
+        self, mock_invoke, sample_response: ATSAnalyzeResponse
     ) -> None:
         """The chain's invoke receives all required prompt template variables."""
-        mock_run_with_retry.return_value = _FAKE_EXPLANATION
+        mock_msg = MagicMock()
+        mock_msg.content = json.dumps(_FAKE_EXPLANATION_DICT)
+        mock_invoke.return_value = mock_msg
         mock_llm = MagicMock()
 
         with patch("app.ai.chains.explain_score_chain.get_chat_model", return_value=mock_llm):
             run_explain_score(sample_response, _SAMPLE_JD)
 
-        call_args = mock_run_with_retry.call_args[1]["inputs"]
+        call_args = mock_invoke.call_args[0][1]
         assert "overall_score" in call_args
         assert "missing_keywords" in call_args
         assert "jd_context" in call_args
 
-    @patch("app.ai.chains.explain_score_chain.run_with_retry")
-    def test_raises_on_llm_error(self, mock_run_with_retry, sample_response: ATSAnalyzeResponse) -> None:
+    @patch("app.ai.chains.explain_score_chain.invoke_with_tracing")
+    def test_raises_on_llm_error(self, mock_invoke, sample_response: ATSAnalyzeResponse) -> None:
         """If the chain raises, run_explain_score propagates the exception."""
-        mock_run_with_retry.side_effect = RuntimeError("LLM unavailable")
+        mock_invoke.side_effect = RuntimeError("LLM unavailable")
         mock_llm = MagicMock()
 
         with patch("app.ai.chains.explain_score_chain.get_chat_model", return_value=mock_llm):

@@ -1,10 +1,9 @@
-"""Integration test for Phase 10.3 — Output guardrail failure & retry policy.
+"""Integration test for Output guardrail failure with NO retry.
 
 Tests verify:
 - When the LLM provider returns a malformed response (fails output validation),
-  the retry policy is triggered exactly once.
-- If both attempts fail output validation, ``AIGenerationError`` is raised
-  internally, caught, and logged.
+  the chain is invoked exactly once. No application-level retry is triggered.
+- AIGenerationError is raised internally, caught, and logged.
 - The HTTP response remains 200 (graceful degradation).
 - The final response has ``ai_status="unavailable"`` and ``ai_explanation=None``.
 - Deterministic ATS scores are still successfully returned.
@@ -18,7 +17,6 @@ import httpx2 as httpx
 import pytest
 import pytest_asyncio
 
-from app.schemas.ai import ATSExplanation
 from main import app
 
 _ENDPOINT = "/v1/ats/analyze"
@@ -57,21 +55,19 @@ def text_payload() -> dict:
 
 @pytest.mark.asyncio
 class TestATSAnalyzeGuardrailFailure:
-    async def test_retry_on_malformed_output_then_graceful_degradation(
+    async def test_no_retry_on_malformed_output_then_graceful_degradation(
         self, client: httpx.AsyncClient, text_payload: dict
     ) -> None:
-        """Verify output validation failure triggers a retry, raises AIGenerationError, and degrades gracefully."""
+        """Verify output validation failure triggers NO retry, raising error and degrading gracefully."""
         # Mock the LLM chain invoke to return a malformed JSON response (missing required fields)
         mock_message = MagicMock()
         mock_message.content = '{"strengths": []}'
         mock_message.response_metadata = {"finish_reason": "stop"}
 
-        # Mock the LLM chain invoke to return the malformed response twice
+        # Mock the LLM chain invoke to return the malformed response
         mock_chain = MagicMock()
         mock_chain.invoke.return_value = mock_message
 
-        # We patch get_chat_model and EXPLAIN_SCORE_PROMPT_V2 in explain_score_chain
-        # to construct our mock_chain.
         mock_llm = MagicMock()
         mock_llm.with_structured_output.return_value = MagicMock()
 
@@ -93,12 +89,5 @@ class TestATSAnalyzeGuardrailFailure:
         assert body.get("ai_status") == "unavailable"
         assert body.get("ai_explanation") is None
 
-        # Verify retry policy was executed exactly once (total 2 invocations: attempt 1 + retry)
-        assert mock_chain.invoke.call_count == 2
-
-        # Verify the second call received the correction instructions in jd_context
-        first_call_args = mock_chain.invoke.call_args_list[0][0][0]
-        second_call_args = mock_chain.invoke.call_args_list[1][0][0]
-
-        assert "CORRECTION REQUIRED" not in first_call_args["jd_context"]
-        assert "CORRECTION REQUIRED" in second_call_args["jd_context"]
+        # Verify retry policy was NOT executed (exactly 1 LLM call)
+        assert mock_chain.invoke.call_count == 1

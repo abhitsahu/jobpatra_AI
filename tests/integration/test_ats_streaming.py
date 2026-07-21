@@ -145,7 +145,7 @@ class TestATSStreaming:
         """Verify that AI failure yields ai_unavailable event but still returns deterministic results."""
         with patch(
             "app.services.ats_service.run_explain_score",
-            side_effect=AIGenerationError("Output guardrail failed after retry."),
+            side_effect=AIGenerationError("Output guardrail failed."),
         ):
             response = await client.post(_ENDPOINT, json=valid_payload, headers=_AUTH_HEADERS)
 

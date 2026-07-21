@@ -4,7 +4,7 @@ Validates LLM output AFTER the chain returns a result.
 
 * Validates the structured ``ATSExplanation`` Pydantic model for logical
   completeness beyond what Pydantic's type system alone enforces.
-* Does NOT retry on failure — retry responsibility lives in ``retry_policy.py``.
+* Does NOT retry on failure — retry responsibility is completely removed.
 * Returns the validated response unchanged if all checks pass.
 
 Checks
@@ -23,6 +23,12 @@ This file does NOT:
 
 from __future__ import annotations
 
+import json
+import re
+from typing import Any
+from pydantic import ValidationError
+
+from app.core.errors import AIGenerationError
 from app.core.logging import logger
 from app.schemas.ai import ATSExplanation
 
@@ -30,9 +36,7 @@ from app.schemas.ai import ATSExplanation
 class OutputValidationError(ValueError):
     """Raised when LLM output fails semantic validation.
 
-    This is NOT an ``AppError``.  It is internal to the guardrail / retry
-    pipeline.  ``retry_policy.py`` catches it and triggers a single retry.
-    After retry, ``AIGenerationError`` is raised if it still fails.
+    This is NOT an ``AppError``. It is internal to the guardrail pipeline.
     """
 
     def __init__(self, message: str, field: str = "") -> None:
@@ -74,6 +78,212 @@ def validate_output(explanation: ATSExplanation) -> ATSExplanation:
     _check_non_empty_list(explanation.recommendations, field="recommendations")
     _check_recommendations(explanation)
 
+    return explanation
+
+
+def clean_json_text(text: str) -> str:
+    """Strip markdown formatting and whitespace around JSON text."""
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
+
+
+def _balance_braces(text: str) -> dict | None:
+    """Close any open strings and braces/brackets in truncated JSON."""
+    in_string = False
+    escape = False
+    stack = []
+    clean_chars = []
+
+    for char in text:
+        clean_chars.append(char)
+        if char == '"' and not escape:
+            in_string = not in_string
+        if char == '\\' and in_string:
+            escape = not escape
+        else:
+            escape = False
+
+        if not in_string:
+            if char in ("{", "["):
+                stack.append(char)
+            elif char in ("}", "]"):
+                if stack:
+                    top = stack[-1]
+                    if (char == "}" and top == "{") or (char == "]" and top == "["):
+                        stack.pop()
+
+    reconstructed = list(clean_chars)
+    if in_string:
+        reconstructed.append('"')
+
+    for op in reversed(stack):
+        if op == "{":
+            reconstructed.append("}")
+        elif op == "[":
+            reconstructed.append("]")
+
+    final_str = "".join(reconstructed)
+    try:
+        return json.loads(final_str)
+    except Exception:
+        return None
+
+
+def repair_truncated_json(raw_text: str) -> dict | None:
+    """Salvage complete elements from a truncated JSON recommendations list."""
+    text = clean_json_text(raw_text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r'"recommendations"\s*:\s*\[', text)
+    if not match:
+        return _balance_braces(text)
+
+    recs_start = match.end()
+    prefix = text[:recs_start]
+    recs_part = text[recs_start:]
+
+    complete_objects = []
+    current_obj = []
+    depth = 0
+    in_string = False
+    escape = False
+
+    for char in recs_part:
+        current_obj.append(char)
+        if char == '"' and not escape:
+            in_string = not in_string
+        if char == "\\" and in_string:
+            escape = not escape
+        else:
+            escape = False
+
+        if not in_string:
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    obj_str = "".join(current_obj).strip()
+                    if obj_str.startswith(","):
+                        obj_str = obj_str[1:].strip()
+                    try:
+                        json.loads(obj_str)
+                        complete_objects.append(obj_str)
+                    except Exception:
+                        pass
+                    current_obj = []
+
+    reconstructed_recs = ", ".join(complete_objects)
+    reconstructed_json_str = prefix + reconstructed_recs + "]}"
+    try:
+        return json.loads(reconstructed_json_str)
+    except Exception:
+        return _balance_braces(text)
+
+
+def _get_fallback_value(field: str, rec: dict) -> str:
+    """Return an appropriate default fallback value for a missing recommendation field."""
+    fallback_map = {
+        "priority": "Medium",
+        "issue": "Resume optimization suggestion.",
+        "why": "Improves ATS parsing and keyword index matches.",
+        "copy_paste_content": "Add relevant certifications and professional achievements.",
+        "placement": "In the relevant section.",
+        "ats_impact": "+5 points",
+    }
+    return rec.get(field) or fallback_map.get(field, "")
+
+
+def parse_and_repair_response(raw_text: str) -> ATSExplanation:
+    """Parse raw LLM response text into ATSExplanation, applying local repairs on failure."""
+    logger.info("[OutputGuardrail] Executing response parsing and local repair checks.")
+
+    # 1. JSON Pre-validation & Truncation Repair
+    cleaned_text = clean_json_text(raw_text)
+    parsed_dict = None
+    try:
+        parsed_dict = json.loads(cleaned_text)
+    except json.JSONDecodeError as json_err:
+        logger.warning(
+            "[OutputGuardrail] JSON decode failed: %s. Attempting truncation repair.",
+            json_err,
+        )
+        parsed_dict = repair_truncated_json(cleaned_text)
+        if not parsed_dict:
+            logger.warning("[OutputGuardrail] JSON truncation repair failed.")
+            raise AIGenerationError(
+                message=f"Invalid JSON format and truncation repair failed: {json_err}",
+                metadata={"raw_text": raw_text},
+            ) from json_err
+        logger.info("[OutputGuardrail] JSON truncation repair succeeded.")
+
+    # 2. Verify recommendations and perform local repair if needed
+    recs = parsed_dict.get("recommendations", [])
+    if isinstance(recs, list):
+        repaired_recs = []
+        for rec_idx, rec in enumerate(recs):
+            if not isinstance(rec, dict):
+                continue
+            missing_fields = [
+                f
+                for f in [
+                    "priority",
+                    "issue",
+                    "why",
+                    "copy_paste_content",
+                    "placement",
+                    "ats_impact",
+                ]
+                if not rec.get(f)
+            ]
+            if missing_fields:
+                logger.warning(
+                    "[OutputGuardrail] Recommendation at index %d missing fields %s. "
+                    "Repairing locally using fallback defaults.",
+                    rec_idx,
+                    missing_fields,
+                )
+                repaired_rec = dict(rec)
+                for field in ["priority", "issue", "why", "copy_paste_content", "placement", "ats_impact"]:
+                    if not repaired_rec.get(field):
+                        repaired_rec[field] = _get_fallback_value(field, rec)
+                repaired_recs.append(repaired_rec)
+            else:
+                repaired_recs.append(rec)
+        parsed_dict["recommendations"] = repaired_recs
+
+    logger.debug("[OutputGuardrail] Parsed JSON output dict: %s", parsed_dict)
+
+    # 3. Pydantic validation
+    try:
+        explanation = ATSExplanation(**parsed_dict)
+    except (ValidationError, TypeError, ValueError) as val_err:
+        logger.error("[OutputGuardrail] Pydantic schema validation failed: %s", val_err)
+        raise AIGenerationError(
+            message=f"Pydantic schema validation failed: {val_err}",
+            metadata={"parsed_dict": parsed_dict},
+        ) from val_err
+
+    # 4. Output Guardrails check
+    try:
+        validate_output(explanation)
+    except OutputValidationError as out_err:
+        logger.error("[OutputGuardrail] Semantic output guardrail check failed: %s", out_err)
+        raise AIGenerationError(
+            message=f"Semantic validation failed: {out_err}",
+            metadata={"parsed_dict": parsed_dict},
+        ) from out_err
+
+    logger.info("[OutputGuardrail] Response validation succeeded.")
     return explanation
 
 

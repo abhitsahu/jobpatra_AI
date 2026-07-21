@@ -101,7 +101,7 @@ class AIGenerationError(Exception):
     report is still returned with HTTP 200.
 
     Use cases:
-        - Output guardrail validation fails after one retry.
+        - Output guardrail validation and local repair fails.
         - LLM returns malformed JSON that cannot be parsed into ``ATSExplanation``.
 
     This error NEVER causes the endpoint to fail.

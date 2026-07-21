@@ -16,7 +16,7 @@ Pipeline
 9. Build ATSAnalyzeResponse (deterministic)
 10. AI explain-score chain with guardrails
     a. Input guardrail — raises InvalidInputError (propagated → HTTP 422)
-    b. Run chain with output validation + single retry
+    b. Run chain with output validation
     c. AIGenerationError → ai_status='unavailable' (HTTP 200, no crash)
 11. Return merged response
 
@@ -661,7 +661,7 @@ def analyze(request: ATSAnalyzeRequest) -> ATSAnalyzeResponse:
             debugger.end_stage("AI Explanation", t_start, success=False, error=InvalidInputError("AI input guardrail rejected input"))
             raise
         except AIGenerationError as exc:
-            _log(f"AI generation failed after retry: {exc.message}")
+            _log(f"AI generation failed: {exc.message}")
             response = response.model_copy(update={"ai_status": "unavailable"})
             _save_artifact(run_dir, "step9_response_final_unavailable", response)
             debugger.end_stage("AI Explanation", t_start, success=False, error=exc)
@@ -913,7 +913,7 @@ async def analyze_stream(
             yield encode_error(exc.message, code="VALIDATION_ERROR")
             return
         except AIGenerationError as exc:
-            _log(f"AI generation failed after retry: {exc.message}")
+            _log(f"AI generation failed: {exc.message}")
             response = response.model_copy(update={"ai_status": "unavailable"})
             _save_artifact(run_dir, "step9_response_final_unavailable", response)
             debugger.end_stage("AI Explanation", t_start, success=False, error=exc)
