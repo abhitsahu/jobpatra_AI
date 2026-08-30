@@ -564,8 +564,6 @@ LANGSMITH_PROJECT="jobpatra-ai"
 ```
 AppError (Base Exception)
 ├── ValidationError          (400 Bad Request)
-├── UnauthorizedError       (401 Unauthorized)
-├── NotFoundError           (404 Not Found)
 ├── UnparsableDocumentError (422 Unprocessable Entity - Invalid PDF/DOCX)
 ├── InvalidInputError       (422 Unprocessable Entity - Prompt Injection / Oversized Text)
 └── InternalServerError     (500 Internal Error)

@@ -38,20 +38,6 @@ class ValidationError(AppError):
         super().__init__(message=message, code="VALIDATION_ERROR", status_code=400)
 
 
-class UnauthorizedError(AppError):
-    """Raised when authentication is missing or invalid."""
-
-    def __init__(self, message: str = "Unauthorized.") -> None:
-        super().__init__(message=message, code="UNAUTHORIZED", status_code=401)
-
-
-class NotFoundError(AppError):
-    """Raised when a requested resource does not exist."""
-
-    def __init__(self, message: str = "Resource not found.") -> None:
-        super().__init__(message=message, code="NOT_FOUND", status_code=404)
-
-
 class InternalServerError(AppError):
     """Raised for unrecoverable internal failures."""
 

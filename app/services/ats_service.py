@@ -37,8 +37,6 @@ from datetime import datetime
 from app.analysis.extraction import (
     education_extractor,
     experience_extractor,
-    keyword_extractor,
-    skill_extractor,
 )
 from app.analysis.extraction.requirement_taxonomy import (
     classify_jd_requirements,

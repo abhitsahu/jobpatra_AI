@@ -70,16 +70,3 @@ def encode_error(message: str, code: str = "INTERNAL_ERROR") -> str:
     """
     payload = json.dumps({"code": code, "message": message}, separators=(",", ":"))
     return f"event: error\ndata: {payload}\n\n"
-
-
-def encode_heartbeat() -> str:
-    """Produce an SSE comment line to keep the connection alive.
-
-    SSE comments (lines starting with ``:`` ) are ignored by the browser
-    EventSource but prevent proxies and load balancers from timing out
-    long-running connections.
-
-    Returns:
-        A single SSE comment line.
-    """
-    return ": heartbeat\n\n"
