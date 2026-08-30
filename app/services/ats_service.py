@@ -30,6 +30,7 @@ import os
 import json
 import time
 import typing
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
@@ -39,6 +40,12 @@ from app.analysis.extraction import (
     keyword_extractor,
     skill_extractor,
 )
+from app.analysis.extraction.requirement_taxonomy import (
+    classify_jd_requirements,
+    fallback_jd_extraction,
+    fallback_resume_extraction,
+    resume_technical_evidence,
+)
 from app.analysis.extraction.education_extractor import EducationExtractionResult
 from app.analysis.extraction.experience_extractor import ExperienceEntry
 from app.analysis.matching import keyword_matcher
@@ -47,6 +54,11 @@ from app.analysis.normalization.jd_normalizer import normalize as normalize_jd
 from app.analysis.parsers import parser_factory
 from app.analysis.scoring import scoring_engine
 from app.ai.chains.explain_score_chain import run_explain_score
+from app.ai.chains.extract_entities_chain import (
+    extract_jd_entities,
+    extract_resume_entities,
+)
+from app.analysis.matching.semantic_matcher import get_shared_provider
 from app.core.errors import AIGenerationError, InvalidInputError, ValidationError
 from app.core.logging import logger
 from app.core.config import settings
@@ -58,7 +70,6 @@ from app.schemas.ats import (
     ExperienceSummarySchema,
     MatchedKeywordSchema,
 )
-
 
 def _get_rejected_tokens(text: str) -> list[tuple[str, str]]:
     import re
@@ -373,8 +384,10 @@ class PipelineDebugger:
             self.log(f"Based on degree level ({deg}) and certifications\n")
             
         self.log(f"Skills Score\n\n{report.skills_score}\n\nReason:")
-        matched_skills_count = len([m for m in match_result.matched if m.matchType in ("EXACT", "SYNONYM", "FUZZY", "SEMANTIC")])
-        self.log(f"Matched {matched_skills_count} skills/keywords\n")
+        self.log(
+            f"Matched {len(report.skill_match_result.matched)} of "
+            f"{report.required_skill_count} required technical skills\n"
+        )
         
         self.log(f"Formatting Score\n\n{report.formatting_score}\n\nReason:")
         import dataclasses
@@ -556,10 +569,12 @@ def analyze(request: ATSAnalyzeRequest) -> ATSAnalyzeResponse:
         # ── Stage 6: Entity Extraction ──────────────────────────────────────
         t_start = debugger.start_stage("entity_extraction", "Entity Extraction")
         try:
-            _log("Extracting resume data")
-            resume_keywords = keyword_extractor.extract(resume_clean)
-            resume_skills_result = skill_extractor.extract(resume_clean)
-            resume_skills = [m.canonical for m in resume_skills_result.skills]
+            _log("Extracting entity data using Hybrid AI (with fallback)")
+            entities = _extract_entities_hybrid(resume_clean, jd_clean, logger_fn=_log)
+            resume_keywords = entities.resume_keywords
+            resume_skills = entities.resume_skills
+            jd_keywords = entities.jd_keywords
+            required_skills = entities.required_skills
 
             exp_text = sections.experience or ""
             experience_entries: list[ExperienceEntry] = experience_extractor.extract(exp_text)
@@ -571,11 +586,6 @@ def analyze(request: ATSAnalyzeRequest) -> ATSAnalyzeResponse:
             _save_artifact(run_dir, "step4_resume_skills", resume_skills)
             _save_artifact(run_dir, "step4_experience_entries", experience_entries)
             _save_artifact(run_dir, "step4_education_result", education_result)
-
-            _log("Extracting JD data")
-            jd_keywords = keyword_extractor.extract(jd_clean)
-            jd_skills_result = skill_extractor.extract(jd_clean)
-            required_skills = [m.canonical for m in jd_skills_result.skills]
 
             _save_artifact(run_dir, "step5_jd_keywords", jd_keywords)
             _save_artifact(run_dir, "step5_required_skills", required_skills)
@@ -594,6 +604,8 @@ def analyze(request: ATSAnalyzeRequest) -> ATSAnalyzeResponse:
             match_result = keyword_matcher.match(
                 resume_keywords=resume_keywords,
                 jd_keywords=jd_keywords,
+                embedding_provider=get_shared_provider(),
+                semantic_threshold=0.60,
             )
             _save_artifact(run_dir, "step6_match_result", match_result)
             elapsed_stage = (time.perf_counter() - t_start) * 1000.0
@@ -614,6 +626,9 @@ def analyze(request: ATSAnalyzeRequest) -> ATSAnalyzeResponse:
                 required_skills=required_skills,
                 education_result=education_result,
                 sections=sections,
+                required_years=entities.required_years,
+                required_education_level=entities.required_education_level,
+                embedding_provider=get_shared_provider(),
             )
             _save_artifact(run_dir, "step7_report", report)
             elapsed_stage = (time.perf_counter() - t_start) * 1000.0
@@ -630,8 +645,8 @@ def analyze(request: ATSAnalyzeRequest) -> ATSAnalyzeResponse:
         response = _build_response(
             report=report,
             match_result=match_result,
-            resume_skills=resume_skills,
-            required_skills=required_skills,
+            culture_signals=entities.culture_signals,
+            extraction_mode=entities.extraction_mode,
             experience_entries=experience_entries,
             education_result=education_result,
             processing_time_ms=elapsed_ms,
@@ -788,10 +803,12 @@ async def analyze_stream(
         # ── Stage 6: Entity Extraction ──────────────────────────────────────
         t_start = debugger.start_stage("entity_extraction", "Entity Extraction")
         try:
-            _log("Extracting resume data")
-            resume_keywords = keyword_extractor.extract(resume_clean)
-            resume_skills_result = skill_extractor.extract(resume_clean)
-            resume_skills = [m.canonical for m in resume_skills_result.skills]
+            _log("Extracting entity data using Hybrid AI (with fallback)")
+            entities = _extract_entities_hybrid(resume_clean, jd_clean, logger_fn=_log)
+            resume_keywords = entities.resume_keywords
+            resume_skills = entities.resume_skills
+            jd_keywords = entities.jd_keywords
+            required_skills = entities.required_skills
 
             exp_text = sections.experience or ""
             experience_entries: list[ExperienceEntry] = experience_extractor.extract(exp_text)
@@ -803,11 +820,6 @@ async def analyze_stream(
             _save_artifact(run_dir, "step4_resume_skills", resume_skills)
             _save_artifact(run_dir, "step4_experience_entries", experience_entries)
             _save_artifact(run_dir, "step4_education_result", education_result)
-
-            _log("Extracting JD data")
-            jd_keywords = keyword_extractor.extract(jd_clean)
-            jd_skills_result = skill_extractor.extract(jd_clean)
-            required_skills = [m.canonical for m in jd_skills_result.skills]
 
             _save_artifact(run_dir, "step5_jd_keywords", jd_keywords)
             _save_artifact(run_dir, "step5_required_skills", required_skills)
@@ -827,6 +839,8 @@ async def analyze_stream(
             match_result = keyword_matcher.match(
                 resume_keywords=resume_keywords,
                 jd_keywords=jd_keywords,
+                embedding_provider=get_shared_provider(),
+                semantic_threshold=0.60,
             )
             _save_artifact(run_dir, "step6_match_result", match_result)
             elapsed_stage = (time.perf_counter() - t_start) * 1000.0
@@ -848,6 +862,9 @@ async def analyze_stream(
                 required_skills=required_skills,
                 education_result=education_result,
                 sections=sections,
+                required_years=entities.required_years,
+                required_education_level=entities.required_education_level,
+                embedding_provider=get_shared_provider(),
             )
             _save_artifact(run_dir, "step7_report", report)
             elapsed_stage = (time.perf_counter() - t_start) * 1000.0
@@ -865,8 +882,8 @@ async def analyze_stream(
         response = _build_response(
             report=report,
             match_result=match_result,
-            resume_skills=resume_skills,
-            required_skills=required_skills,
+            culture_signals=entities.culture_signals,
+            extraction_mode=entities.extraction_mode,
             experience_entries=experience_entries,
             education_result=education_result,
             processing_time_ms=elapsed_ms,
@@ -943,6 +960,87 @@ async def analyze_stream(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class ExtractedATSEntities:
+    """Score-ready entities with culture signals kept outside technical coverage."""
+
+    resume_keywords: list[str]
+    resume_skills: list[str]
+    jd_keywords: list[str]
+    required_skills: list[str]
+    culture_signals: list[str]
+    required_years: float
+    required_education_level: str
+    extraction_mode: str
+
+
+def _extract_entities_hybrid(
+    resume_clean: str,
+    jd_clean: str,
+    logger_fn: typing.Callable[[str], None] | None = None,
+) -> ExtractedATSEntities:
+    """Extract keywords and skills using Hybrid AI Agent extraction with fallback.
+
+    Returns:
+        Score-ready entities, with culture signals excluded from score inputs.
+    """
+    log = logger_fn or (lambda msg: None)
+    try:
+        log("Attempting Hybrid AI entity extraction")
+        resume_ext = extract_resume_entities(resume_clean)
+        jd_ext = extract_jd_entities(jd_clean)
+
+        taxonomy = classify_jd_requirements(jd_ext)
+        r_skills = resume_technical_evidence(resume_ext)
+        r_keywords = r_skills + [
+            item for item in resume_ext.soft_skills if item.lower() not in {skill.lower() for skill in r_skills}
+        ]
+        j_keywords = taxonomy.keyword_requirements
+        req_skills = taxonomy.required_technical_skills
+
+        log(f"[Hybrid AI] Extracted {len(r_keywords)} resume keywords, {len(j_keywords)} JD keywords")
+        log(
+            f"[Hybrid AI] Scoring {len(req_skills)} required technical skills; "
+            f"retaining {len(taxonomy.culture_signals)} culture signals for feedback"
+        )
+        return ExtractedATSEntities(
+            resume_keywords=r_keywords,
+            resume_skills=r_skills,
+            jd_keywords=j_keywords,
+            required_skills=req_skills,
+            culture_signals=taxonomy.culture_signals,
+            required_years=jd_ext.min_experience,
+            required_education_level=jd_ext.required_education_level,
+            extraction_mode="hybrid_ai",
+        )
+
+    except Exception as exc:
+        log(f"[Hybrid AI] Extraction failed or unavailable ({exc}). Falling back to naive extractors.")
+        logger.warning(
+            "[HybridExtract] AI extraction failed (%s). Falling back to naive extractors.",
+            exc,
+        )
+
+        resume_ext = fallback_resume_extraction(resume_clean)
+        jd_ext = fallback_jd_extraction(jd_clean)
+        taxonomy = classify_jd_requirements(jd_ext)
+        r_skills = resume_technical_evidence(resume_ext)
+        r_keywords = list(r_skills)
+        j_keywords = taxonomy.keyword_requirements
+        req_skills = taxonomy.required_technical_skills
+
+        return ExtractedATSEntities(
+            resume_keywords=r_keywords,
+            resume_skills=r_skills,
+            jd_keywords=j_keywords,
+            required_skills=req_skills,
+            culture_signals=taxonomy.culture_signals,
+            required_years=jd_ext.min_experience,
+            required_education_level=jd_ext.required_education_level,
+            extraction_mode="deterministic_fallback",
+        )
+
+
 def _parse_resume(request: ATSAnalyzeRequest) -> str:
     """Convert the resume input to plain text."""
     if request.resume.file_bytes is not None and request.resume.filename is not None:
@@ -961,8 +1059,8 @@ def _build_response(
     *,
     report: scoring_engine.ATSReport,
     match_result: keyword_matcher.MatchResult,
-    resume_skills: list[str],
-    required_skills: list[str],
+    culture_signals: list[str],
+    extraction_mode: str,
     experience_entries: list[ExperienceEntry],
     education_result: EducationExtractionResult,
     processing_time_ms: float,
@@ -973,21 +1071,24 @@ def _build_response(
             keyword=m.keyword,
             matchType=m.matchType,
             similarity=m.similarity,
+            matched_jd_keyword=m.matched_jd_keyword,
+            is_related_concept=m.is_related_concept,
         )
         for m in match_result.matched
     ]
+    related_kw = [
+        MatchedKeywordSchema(
+            keyword=m.keyword,
+            matchType=m.matchType,
+            similarity=m.similarity,
+            matched_jd_keyword=m.matched_jd_keyword,
+            is_related_concept=True,
+        )
+        for m in match_result.related
+    ]
 
-    required_lower = {s.lower() for s in required_skills}
-    resume_lower_map = {s.lower(): s for s in resume_skills}
-    matched_skills = [
-        resume_lower_map[s]
-        for s in resume_lower_map
-        if s in required_lower
-    ]
-    missing_skills = [
-        s for s in required_skills
-        if s.lower() not in {ms.lower() for ms in matched_skills}
-    ]
+    matched_skills = [match.keyword for match in report.skill_match_result.matched]
+    missing_skills = list(report.skill_match_result.missing)
 
     exp_summary = ExperienceSummarySchema(
         total_entries=len(experience_entries),
@@ -1020,8 +1121,16 @@ def _build_response(
         formatting_score=report.formatting_score,
         matched_keywords=matched_kw,
         missing_keywords=match_result.missing,
+        related_keywords=related_kw,
         matched_skills=matched_skills,
         missing_skills=missing_skills,
+        required_skill_count=report.required_skill_count,
+        culture_signals=culture_signals,
+        extraction_mode=extraction_mode,
+        required_experience_years=report.required_experience_years,
+        candidate_experience_years=report.candidate_experience_years,
+        required_education_level=report.required_education_level,
+        candidate_education_level=report.candidate_education_level,
         experience_summary=exp_summary,
         education_summary=edu_summary,
         processing_time_ms=round(processing_time_ms, 2),

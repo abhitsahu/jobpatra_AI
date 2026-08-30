@@ -10,6 +10,10 @@ from app.api.v1.jd_extract import router as jd_extract_router
 from app.core.config import settings
 from app.core.errors import register_error_handlers
 from app.core.logging import logger, setup_logging
+from app.analysis.matching.semantic_matcher import (
+    clear_shared_provider,
+    initialize_shared_provider,
+)
 from app.middleware.internal_auth_middleware import InternalAuthMiddleware
 from app.middleware.logging_middleware import LoggingMiddleware
 from app.middleware.request_id_middleware import RequestIDMiddleware
@@ -26,7 +30,9 @@ async def lifespan(app: FastAPI):
         settings.HOST,
         settings.PORT,
     )
+    initialize_shared_provider()
     yield
+    clear_shared_provider()
     logger.info("%s shutting down", settings.APP_NAME)
 
 

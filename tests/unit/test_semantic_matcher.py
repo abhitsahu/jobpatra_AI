@@ -12,6 +12,7 @@ logic.
 Deterministic. No AI. No network.
 """
 
+import logging
 import math
 from typing import Any
 
@@ -109,7 +110,7 @@ class TestMatchUnresolved:
         )
         assert len(results) == 1
         assert results[0].matched is True
-        assert results[0].matchType == "SEMANTIC"
+        assert results[0].matchType == "RELATED"
         assert results[0].similarity > SIMILARITY_THRESHOLD
         assert remaining_jd == []
 
@@ -121,7 +122,7 @@ class TestMatchUnresolved:
             provider=_PROVIDER,
         )
         assert results[0].matched is True
-        assert results[0].matchType == "SEMANTIC"
+        assert results[0].matchType == "RELATED"
         assert remaining_jd == []
 
     def test_microservices_matches_distributed_systems(self) -> None:
@@ -143,6 +144,17 @@ class TestMatchUnresolved:
         assert results[0].matched is False
         assert results[0].matchType == "MISSING"
         assert "Project Management" in remaining_jd
+
+    def test_python_does_not_count_as_functional_programming(self) -> None:
+        """A named language is not evidence of functional-programming practice."""
+        results, remaining_jd = match_unresolved(
+            resume_keywords=["Python"],
+            jd_keywords=["Functional Programming"],
+            provider=_PROVIDER,
+            threshold=0.60,
+        )
+        assert results[0].matched is False
+        assert remaining_jd == ["Functional Programming"]
 
     def test_similarity_score_returned(self) -> None:
         """Similarity score must always be populated (for debugging)."""
@@ -192,6 +204,16 @@ class TestMatchUnresolved:
         for r in results:
             assert isinstance(r, SemanticMatchResult)
 
+    def test_logs_top_three_semantic_candidates(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Semantic diagnostics include the best three JD candidates per keyword."""
+        caplog.set_level(logging.INFO, logger="jobpatra")
+        match_unresolved(
+            resume_keywords=["RESTful Services"],
+            jd_keywords=["REST API", "Backend Development", "Project Management"],
+            provider=_PROVIDER,
+        )
+        assert "[SemanticMatcher] Top matches for 'RESTful Services'" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # Tests — keyword_matcher integration
@@ -209,10 +231,12 @@ class TestKeywordMatcherWithSemantic:
             jd_keywords=["REST API"],
             embedding_provider=_PROVIDER,
         )
-        assert len(result.matched) == 1
-        assert result.matched[0].keyword == "RESTful Services"
-        assert result.matched[0].matchType == "SEMANTIC"
-        assert result.matched[0].similarity is not None
+        assert result.matched == []
+        assert result.related[0].keyword == "RESTful Services"
+        assert result.related[0].matchType == "RELATED"
+        assert result.related[0].similarity is not None
+        assert result.related[0].is_related_concept is True
+        assert result.missing == ["REST API"]
         assert result.unresolved == []
 
     def test_no_unresolved_with_provider(self) -> None:
@@ -243,7 +267,9 @@ class TestKeywordMatcherWithSemantic:
 
         assert match_map.get("React") == "EXACT"
         assert match_map.get("NodeJS") == "SYNONYM"
-        assert match_map.get("RESTful Services") == "SEMANTIC"
+        assert match_map.get("RESTful Services") is None
+        assert result.related[0].keyword == "RESTful Services"
+        assert result.related[0].matched_jd_keyword == "REST API"
         assert "AWS" in result.missing
         assert result.unresolved == []
 

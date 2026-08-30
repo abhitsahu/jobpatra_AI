@@ -101,3 +101,7 @@ class TestCombined:
     def test_deterministic(self) -> None:
         entries = [_entry(duration=3.0, bullets=["x", "y"], metrics=["5%"])]
         assert experience_score.calculate(entries) == experience_score.calculate(entries)
+
+    def test_below_explicit_jd_requirement_is_capped(self) -> None:
+        entries = [_entry(duration=2.0, bullets=["x"] * 6, metrics=["1%"] * 6)]
+        assert experience_score.calculate(entries, required_years=5.0) == 30.0

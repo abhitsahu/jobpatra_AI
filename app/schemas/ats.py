@@ -127,6 +127,10 @@ class MatchedKeywordSchema(BaseModel):
     """How it was matched: EXACT | SYNONYM | FUZZY | SEMANTIC."""
     similarity: float | None = None
     """Cosine similarity (only for SEMANTIC matches)."""
+    matched_jd_keyword: str | None = None
+    """The corresponding job-description term."""
+    is_related_concept: bool = False
+    """True when this is advisory related-concept evidence, not a direct match."""
 
 
 class ExperienceSummarySchema(BaseModel):
@@ -182,12 +186,24 @@ class ATSAnalyzeResponse(BaseModel):
     """Keywords from the JD that were found in the resume."""
     missing_keywords: list[str]
     """Keywords from the JD that were NOT found in the resume."""
+    related_keywords: list[MatchedKeywordSchema] = Field(default_factory=list)
+    """Embedding-derived related concepts excluded from coverage scoring."""
 
     # ── Skill coverage ─────────────────────────────────────────────────────
     matched_skills: list[str]
     """Canonical skill names present in both resume and JD."""
     missing_skills: list[str]
     """Canonical skill names required by the JD but absent from the resume."""
+    required_skill_count: int = 0
+    """Number of score-bearing required technical skills in the JD."""
+    culture_signals: list[str] = Field(default_factory=list)
+    """Feedback-only culture signals; these do not affect technical coverage."""
+    extraction_mode: Literal["hybrid_ai", "deterministic_fallback"] = "deterministic_fallback"
+    """Whether score inputs came from Hybrid AI extraction or technical fallback."""
+    required_experience_years: float = 0.0
+    candidate_experience_years: float = 0.0
+    required_education_level: str = "none"
+    candidate_education_level: str = "unknown"
 
     # ── Extracted metadata ─────────────────────────────────────────────────
     experience_summary: ExperienceSummarySchema

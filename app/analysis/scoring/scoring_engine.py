@@ -31,11 +31,12 @@ Weighted formula
 All inputs and the overall score live in the range [0.0, 100.0].
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.analysis.extraction.education_extractor import EducationExtractionResult
 from app.analysis.extraction.experience_extractor import ExperienceEntry
 from app.analysis.matching.keyword_matcher import MatchResult
+from app.analysis.matching.semantic_matcher import EmbeddingProvider
 from app.analysis.normalization.section_splitter import ResumeSection
 from app.analysis.scoring import (
     education_score,
@@ -71,6 +72,18 @@ class ATSReport:
     """Summary quality score [0–100]."""
     overall_score: float
     """Weighted average of all sub-scores, rounded to 2 decimal places."""
+    skill_match_result: MatchResult = field(default_factory=MatchResult)
+    """Exact technical-skill matches used to calculate ``skills_score``."""
+    required_skill_count: int = 0
+    """Technical-skill denominator used by ``skills_score``."""
+    required_experience_years: float = 0.0
+    """Explicit JD experience requirement used by ``experience_score``."""
+    candidate_experience_years: float = 0.0
+    """Parsed candidate experience years used by ``experience_score``."""
+    required_education_level: str = "none"
+    """Explicit normalized JD degree requirement."""
+    candidate_education_level: str = "unknown"
+    """Highest normalized degree detected on the resume."""
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +99,9 @@ def score(
     education_result: EducationExtractionResult,
     sections: ResumeSection,
     weights: ScoringWeights = DEFAULT_WEIGHTS,
+    required_years: float = 0.0,
+    required_education_level: str = "none",
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> ATSReport:
     """Compute the full ATS report for a resume + JD pair.
 
@@ -102,10 +118,15 @@ def score(
         ``ATSReport`` with all sub-scores and the weighted ``overall_score``.
     """
     kw   = keyword_score.calculate(match_result)
-    exp  = experience_score.calculate(experience_entries)
-    sk   = skills_score.calculate(resume_skills, required_skills)
+    exp  = experience_score.calculate(experience_entries, required_years)
+    skill_result = skills_score.evaluate(
+        resume_skills,
+        required_skills,
+        embedding_provider=embedding_provider,
+    )
+    sk = skill_result.score
     fmt  = formatting_score.calculate(sections)
-    edu  = education_score.calculate(education_result)
+    edu  = education_score.calculate(education_result, required_education_level)
     summ = summary_score.calculate(sections.summary)
 
     overall = _weighted_average(kw, exp, sk, fmt, edu, summ, weights)
@@ -118,6 +139,12 @@ def score(
         education_score=round(edu, 2),
         summary_score=round(summ, 2),
         overall_score=round(overall, 2),
+        skill_match_result=skill_result.match_result,
+        required_skill_count=skill_result.required_skill_count,
+        required_experience_years=required_years,
+        candidate_experience_years=experience_score.total_years(experience_entries),
+        required_education_level=required_education_level,
+        candidate_education_level=education_score.highest_level(education_result),
     )
 
 

@@ -65,8 +65,59 @@ SYNONYMS: dict[str, frozenset[str]] = {
     "Ansible":      frozenset({"ansible"}),
     "Jenkins":      frozenset({"jenkins"}),
     "CI/CD":        frozenset({"ci/cd", "cicd", "ci cd", "continuous integration",
-                               "continuous delivery", "continuous deployment"}),
+                               "continuous delivery", "continuous deployment", "github actions",
+                               "jenkins"}),
     "GitHub Actions":frozenset({"github actions", "gh actions", "github-actions"}),
+
+    # Payment / Fintech Domain
+    "Functional Programming": frozenset({
+        "functional programming", "haskell", "scala", "python fp",
+        "lambda calculus", "immutability",
+    }),
+    "Distributed Systems": frozenset({
+        "distributed systems", "microservices", "scalability", "concurrency",
+        "parallel computing", "service mesh",
+    }),
+    "Payment Orchestration": frozenset({
+        "payment orchestration", "transaction routing", "payment flow",
+        "orchestration layer", "payment gateway",
+    }),
+    "Multi-DC Architecture": frozenset({
+        "multi-dc architecture", "multi-datacenter", "geo-redundant",
+        "high availability", "disaster recovery",
+    }),
+    "Self-Healing Systems": frozenset({
+        "self-healing systems", "auto-recovery", "fault tolerance",
+        "resilience engineering",
+    }),
+    "Traffic Routing": frozenset({
+        "traffic routing", "load balancing", "request routing", "api gateway", "ingress",
+    }),
+    "Anomaly Detection": frozenset({
+        "anomaly detection", "fraud detection", "outlier detection",
+        "real-time monitoring", "alerting",
+    }),
+    "Payment Tokenization": frozenset({
+        "payment tokenization", "tokenization", "data masking", "vaulting", "secure storage",
+    }),
+    "Fraud & Risk Management": frozenset({
+        "fraud & risk management", "fraud prevention", "risk scoring", "compliance", "aml",
+    }),
+    "Edge Computing": frozenset({"edge computing", "edge devices", "cdn", "distributed edge"}),
+    "First Principles Thinking": frozenset({
+        "first principles thinking", "fundamental reasoning", "principles-based design",
+        "system design",
+    }),
+    "Low-Code/No-Code": frozenset({
+        "low-code/no-code", "rapid application development", "visual programming",
+        "citizen development",
+    }),
+    "API Integrations": frozenset({
+        "api integrations", "rest apis", "graphql", "webhooks", "sdk integration",
+    }),
+    "Infrastructure as Code": frozenset({
+        "infrastructure as code", "terraform", "cloudformation", "pulumi", "iac",
+    }),
 
     #  Data & ML 
     "Machine Learning": frozenset({"machine learning", "ml"}),

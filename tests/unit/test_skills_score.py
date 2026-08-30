@@ -29,6 +29,21 @@ class TestBasicScoring:
     def test_empty_resume_returns_zero(self) -> None:
         assert skills_score.calculate([], ["Python", "Docker"]) == 0.0
 
+    def test_evaluation_exposes_the_exact_score_evidence(self) -> None:
+        result = skills_score.evaluate(
+            ["React.js", "Microservices", "Python"],
+            ["React", "Distributed Systems", "Functional Programming"],
+            embedding_provider=None,
+        )
+
+        assert result.required_skill_count == 3
+        assert result.score == (2 / 3) * 100.0
+        assert [match.keyword for match in result.match_result.matched] == [
+            "React.js",
+            "Microservices",
+        ]
+        assert result.match_result.missing == ["Functional Programming"]
+
 
 class TestCaseInsensitivity:
     def test_case_insensitive_match(self) -> None:

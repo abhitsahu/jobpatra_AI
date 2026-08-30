@@ -57,9 +57,9 @@ class ScoringWeights:
 # ---------------------------------------------------------------------------
 
 DEFAULT_WEIGHTS = ScoringWeights(
-    keyword_score=0.40,
+    keyword_score=0.30,
     experience_score=0.25,
-    skills_score=0.15,
+    skills_score=0.25,
     formatting_score=0.10,
     education_score=0.05,
     summary_score=0.05,

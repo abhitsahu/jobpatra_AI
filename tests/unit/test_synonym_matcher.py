@@ -59,6 +59,28 @@ class TestSynonymMatch:
         assert len(result.matched) == 1
         assert result.matched[0].matchType == "SYNONYM"
 
+    def test_distributed_systems_matches_microservices(self) -> None:
+        """Fintech domain aliases resolve before fuzzy or semantic matching."""
+        result: MatchResult = keyword_matcher.match(
+            ["Microservices"], ["Distributed Systems"]
+        )
+        assert len(result.matched) == 1
+        assert result.matched[0].matchType == "SYNONYM"
+
+    def test_payment_orchestration_matches_payment_gateway(self) -> None:
+        """Payment orchestration aliases resolve through the synonym stage."""
+        result: MatchResult = keyword_matcher.match(
+            ["Payment Gateway"], ["Payment Orchestration"]
+        )
+        assert len(result.matched) == 1
+        assert result.matched[0].matchType == "SYNONYM"
+
+    def test_overlapping_aliases_preserve_all_synonym_groups(self) -> None:
+        """An alias must not lose CI/CD membership to a later map entry."""
+        result: MatchResult = keyword_matcher.match(["GitHub Actions"], ["CI/CD"])
+        assert len(result.matched) == 1
+        assert result.matched[0].matchType == "SYNONYM"
+
     def test_unknown_keyword_not_synonym_matched(self) -> None:
         """Keywords not in the synonym map should not be matched via synonyms."""
         result: MatchResult = keyword_matcher.match(

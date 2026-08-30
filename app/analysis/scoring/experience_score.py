@@ -32,17 +32,23 @@ _FULL_BULLET_DENSITY: float = 4.0
 # Metrics: full score when total quantified achievements >= this
 _FULL_METRIC_COUNT: int = 6
 
+# A candidate below an explicit JD experience requirement cannot receive a
+# strong requirement-fit score purely from polished bullet points.
+_BELOW_REQUIREMENT_CAP: float = 30.0
+
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
-def calculate(entries: list[ExperienceEntry]) -> float:
+def calculate(entries: list[ExperienceEntry], required_years: float = 0.0) -> float:
     """Compute the experience score.
 
     Args:
         entries: Work experience entries from ``experience_extractor.extract()``.
+        required_years: Explicit minimum years required by the JD. ``0`` means
+            the JD did not state a requirement.
 
     Returns:
         Score in [0.0, 100.0].  Returns 0.0 for an empty entry list.
@@ -55,8 +61,16 @@ def calculate(entries: list[ExperienceEntry]) -> float:
     bullet_pts = _bullet_density_score(entries)
     metrics_pts = _metrics_score(entries)
 
-    total = duration_pts + continuity_pts + bullet_pts + metrics_pts
-    return _clamp(total)
+    total = _clamp(duration_pts + continuity_pts + bullet_pts + metrics_pts)
+    candidate_years = total_years(entries)
+    if required_years > 0 and candidate_years < required_years:
+        return min(total, _BELOW_REQUIREMENT_CAP)
+    return total
+
+
+def total_years(entries: list[ExperienceEntry]) -> float:
+    """Return the parsed cumulative experience duration in years."""
+    return sum(e.duration_years for e in entries if e.duration_years is not None)
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +87,8 @@ def _duration_score(entries: list[ExperienceEntry]) -> float:
     Returns:
         Points in [0.0, 40.0].
     """
-    total_years = sum(e.duration_years for e in entries if e.duration_years is not None)
-    ratio = min(total_years / _FULL_DURATION_YEARS, 1.0)
+    years = total_years(entries)
+    ratio = min(years / _FULL_DURATION_YEARS, 1.0)
     return round(ratio * 40.0, 4)
 
 

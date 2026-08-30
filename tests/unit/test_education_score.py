@@ -77,3 +77,9 @@ class TestEdgeCases:
     def test_deterministic(self) -> None:
         r = _result(["B.Sc"], certs=1)
         assert education_score.calculate(r) == education_score.calculate(r)
+
+    def test_below_explicit_jd_degree_requirement_is_capped(self) -> None:
+        assert education_score.calculate(_result(["B.Sc"]), required_level="masters") == 30.0
+
+    def test_candidate_meeting_explicit_jd_degree_requirement_keeps_score(self) -> None:
+        assert education_score.calculate(_result(["Master of Science"]), required_level="bachelors") == 90.0

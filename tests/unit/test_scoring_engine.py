@@ -3,7 +3,7 @@
 Tests hand-calculate the expected weighted average to verify the engine
 combines sub-scores correctly.
 
-Weights:  keyword=0.40  experience=0.25  skills=0.15
+Weights:  keyword=0.30  experience=0.25  skills=0.25
           formatting=0.10  education=0.05  summary=0.05
 
 Deterministic. No AI. No network.
@@ -122,9 +122,9 @@ class TestWeightedAverage:
           education_score  = 80.0   (B.Sc)
           summary_score    = 0.0    (no summary)
 
-        weighted = 75×0.40 + 0×0.25 + 100×0.15 + 30×0.10 + 80×0.05 + 0×0.05
-                 = 30 + 0 + 15 + 3 + 4 + 0
-                 = 52.0
+        weighted = 75×0.30 + 0×0.25 + 100×0.25 + 30×0.10 + 80×0.05 + 0×0.05
+                 = 22.5 + 0 + 25.0 + 3 + 4 + 0
+                 = 54.5
         """
         report = scoring_engine.score(
             match_result=_match_result(3, 1),
@@ -140,7 +140,7 @@ class TestWeightedAverage:
         assert report.formatting_score == 30.0
         assert report.education_score == 80.0
         assert report.summary_score == 0.0
-        assert report.overall_score == pytest.approx(52.0, abs=0.01)
+        assert report.overall_score == pytest.approx(54.5, abs=0.01)
 
     def test_all_perfect_scores_give_overall_100(self) -> None:
         """When all sub-scores are at or near maximum, overall is near 100.

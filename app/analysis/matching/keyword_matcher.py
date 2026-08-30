@@ -45,7 +45,7 @@ from app.analysis.matching.synonym_map import SYNONYMS
 # Types
 # ---------------------------------------------------------------------------
 
-MatchType = Literal["EXACT", "SYNONYM", "FUZZY", "SEMANTIC"]
+MatchType = Literal["EXACT", "SYNONYM", "FUZZY", "RELATED"]
 
 
 @dataclass
@@ -57,7 +57,11 @@ class MatchedKeyword:
     matchType: MatchType
     """How the match was achieved."""
     similarity: float | None = None
-    """Cosine similarity score (populated only for SEMANTIC matches)."""
+    """Cosine similarity score for related-concept matches."""
+    matched_jd_keyword: str | None = None
+    """The JD term satisfied or related to this resume term."""
+    is_related_concept: bool = False
+    """Whether this is advisory semantic evidence rather than a direct match."""
 
 
 @dataclass
@@ -76,20 +80,28 @@ class MatchResult:
     or MISSING.  Without a provider, any keywords that survive fuzzy matching
     land here.
     """
+    related: list[MatchedKeyword] = field(default_factory=list)
+    """Embedding-derived related concepts; never score-bearing."""
 
 
 # ---------------------------------------------------------------------------
 # Build synonym lookup at import time
 # ---------------------------------------------------------------------------
 
-_ALIAS_TO_CANONICAL: dict[str, str] = {}
+_ALIAS_TO_CANONICAL: dict[str, set[str]] = {}
 for _canonical, _aliases in SYNONYMS.items():
     for _alias in _aliases:
-        _ALIAS_TO_CANONICAL[_alias] = _canonical
+        _ALIAS_TO_CANONICAL.setdefault(_alias, set()).add(_canonical)
 
 
-def _synonym_canonical(keyword: str) -> str | None:
-    return _ALIAS_TO_CANONICAL.get(normalise(keyword))
+def _synonym_canonicals(keyword: str) -> set[str]:
+    """Return every synonym group containing ``keyword``.
+
+    Some aliases, such as ``terraform`` and ``github actions``, are valid in
+    more than one group. Keeping every group prevents later map entries from
+    silently overwriting earlier groups during module import.
+    """
+    return _ALIAS_TO_CANONICAL.get(normalise(keyword), set())
 
 
 # ---------------------------------------------------------------------------
@@ -135,15 +147,19 @@ def match(
     exact_matched, remaining_resume, remaining_jd = exact_matcher.match_all(
         remaining_resume, remaining_jd
     )
-    for rk, _ in exact_matched:
-        result.matched.append(MatchedKeyword(keyword=rk, matchType="EXACT"))
+    for rk, jd_kw in exact_matched:
+        result.matched.append(
+            MatchedKeyword(keyword=rk, matchType="EXACT", matched_jd_keyword=jd_kw)
+        )
 
     # ── Step 2: Synonym ─────────────────────────────────────────────────────
     still_unmatched: list[str] = []
     for rk in remaining_resume:
         jd_match = _synonym_match(rk, remaining_jd)
         if jd_match is not None:
-            result.matched.append(MatchedKeyword(keyword=rk, matchType="SYNONYM"))
+            result.matched.append(
+                MatchedKeyword(keyword=rk, matchType="SYNONYM", matched_jd_keyword=jd_match)
+            )
             remaining_jd.remove(jd_match)
         else:
             still_unmatched.append(rk)
@@ -153,8 +169,10 @@ def match(
     fuzzy_matched, remaining_resume, remaining_jd = fuzzy_matcher.match_all(
         remaining_resume, remaining_jd, fuzzy_threshold
     )
-    for rk, _ in fuzzy_matched:
-        result.matched.append(MatchedKeyword(keyword=rk, matchType="FUZZY"))
+    for rk, jd_kw in fuzzy_matched:
+        result.matched.append(
+            MatchedKeyword(keyword=rk, matchType="FUZZY", matched_jd_keyword=jd_kw)
+        )
 
     # ── Step 4: Semantic (optional) ─────────────────────────────────────────
     if embedding_provider is not None and remaining_resume:
@@ -166,6 +184,7 @@ def match(
             resume_keywords=remaining_resume,
             jd_keywords=remaining_jd,
             provider=embedding_provider,
+            consume_matches=False,
             **kwargs,
         )
         _apply_semantic_results(result, semantic_results)
@@ -194,12 +213,12 @@ def _synonym_match(resume_keyword: str, jd_keywords: list[str]) -> str | None:
     Returns:
         Matching JD keyword string, or ``None``.
     """
-    resume_canonical = _synonym_canonical(resume_keyword)
-    if resume_canonical is None:
+    resume_canonicals = _synonym_canonicals(resume_keyword)
+    if not resume_canonicals:
         return None
     for jd_kw in jd_keywords:
-        jd_canonical = _synonym_canonical(jd_kw)
-        if jd_canonical is not None and jd_canonical == resume_canonical:
+        jd_canonicals = _synonym_canonicals(jd_kw)
+        if resume_canonicals.intersection(jd_canonicals):
             return jd_kw
     return None
 
@@ -210,9 +229,8 @@ def _apply_semantic_results(
 ) -> None:
     """Merge semantic match results into ``result`` in place.
 
-    Matched items are appended to ``result.matched`` with matchType=SEMANTIC
-    and their similarity score populated.  Unmatched items are added to
-    ``result.missing`` (the resume lacks those concepts).
+    Related items are separate from direct matches. They never increase
+    keyword or skills coverage and leave the corresponding JD term missing.
 
     Args:
         result: The ``MatchResult`` being built.
@@ -220,13 +238,12 @@ def _apply_semantic_results(
     """
     for sr in semantic_results:
         if sr.matched:
-            result.matched.append(
+            result.related.append(
                 MatchedKeyword(
                     keyword=sr.keyword,
-                    matchType="SEMANTIC",
+                    matchType="RELATED",
                     similarity=sr.similarity,
+                    matched_jd_keyword=sr.matched_jd_keyword,
+                    is_related_concept=True,
                 )
             )
-        # Note: unmatched semantic results are NOT added to missing here —
-        # the resume keyword is simply unresolved against the JD.
-        # The remaining_jd (returned from match_unresolved) goes to missing.

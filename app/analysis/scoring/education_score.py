@@ -61,11 +61,16 @@ _CERT_BONUS_CAP: int = 10
 # ---------------------------------------------------------------------------
 
 
-def calculate(education_result: EducationExtractionResult) -> float:
+def calculate(
+    education_result: EducationExtractionResult,
+    required_level: str = "none",
+) -> float:
     """Compute the education score.
 
     Args:
         education_result: Output of ``education_extractor.extract()``.
+        required_level: Explicit JD minimum: none, associate, bachelors,
+            masters, or phd.
 
     Returns:
         Score in [0.0, 100.0].
@@ -75,7 +80,29 @@ def calculate(education_result: EducationExtractionResult) -> float:
         len(education_result.certifications) * _CERT_BONUS_PER,
         _CERT_BONUS_CAP,
     )
-    return _clamp(base + cert_bonus)
+    score = _clamp(base + cert_bonus)
+    if required_level != "none" and not meets_requirement(education_result, required_level):
+        return min(score, 30.0)
+    return score
+
+
+def highest_level(result: EducationExtractionResult) -> str:
+    """Return the highest detected normalized education level."""
+    best_level = "unknown"
+    best_points = 0
+    for entry in result.entries:
+        level = _classify_degree(entry.degree)
+        points = _DEGREE_BASE_SCORE.get(level, 0)
+        if points > best_points:
+            best_level = level
+            best_points = points
+    return best_level
+
+
+def meets_requirement(result: EducationExtractionResult, required_level: str) -> bool:
+    """Return whether the candidate meets an explicit normalized JD requirement."""
+    ranks = {"unknown": 0, "other": 1, "associate": 2, "bachelors": 3, "masters": 4, "phd": 5}
+    return ranks.get(highest_level(result), 0) >= ranks.get(required_level, 0)
 
 
 # ---------------------------------------------------------------------------
