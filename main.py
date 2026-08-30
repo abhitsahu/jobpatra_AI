@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from app.api.v1.ats import router as ats_router
 from app.api.v1.health import router as health_router
 from app.api.v1.jd_extract import router as jd_extract_router
+from app.api.v1.resume_improve import router as resume_improve_router
 from app.core.config import settings
 from app.core.errors import register_error_handlers
 from app.core.logging import logger, setup_logging
@@ -71,3 +72,4 @@ register_error_handlers(app)
 app.include_router(health_router)
 app.include_router(ats_router)
 app.include_router(jd_extract_router)
+app.include_router(resume_improve_router)
