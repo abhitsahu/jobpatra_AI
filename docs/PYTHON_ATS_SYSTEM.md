@@ -157,10 +157,9 @@ Ai_backend/
 │   │   │   └── skill_extractor.py      # Skill gazetteer & canonicalizer
 │   │   ├── matching/
 │   │   │   ├── exact_matcher.py    # Case-insensitive exact string match
-│   │   │   ├── synonym_map.py      # Canonical tech synonym dictionary
 │   │   │   ├── fuzzy_matcher.py    # RapidFuzz WRatio matching
 │   │   │   ├── semantic_matcher.py # Cosine similarity matching (optional)
-│   │   │   └── keyword_matcher.py  # 4-stage matcher orchestrator
+│   │   │   └── keyword_matcher.py  # 4-stage taxonomy-aware matcher
 │   │   ├── normalization/
 │   │   │   ├── text_cleaner.py     # Whitespace, control char, & artifact cleaner
 │   │   │   ├── jd_normalizer.py    # Job description text standardizer
@@ -238,7 +237,7 @@ class ATSExplanation(BaseModel):
   * **Strict Policy:** Every recommendation must provide **complete, copy-paste ready content** (e.g., full rewritten bullet points or category-grouped skills). Generic advice ("add metrics") is forbidden.
 * **LLM Provider & Router Architecture (`litellm_client.py`):**
   * Backed by `LiteLLM Router` with automatic health checks, cooldowns, and retries.
-  * **Primary Model:** `gemini/gemini-3.5-flash`
+  * **Primary Model:** `gemini/gemini-3.1-flash-lite`
   * **Fallback Model 1:** `gemini/gemini-3.1-flash-lite`
   * **Fallback Model 2:** `groq/llama-3.1-8b-instant`
 
@@ -338,7 +337,7 @@ $$\text{Overall Score} = \sum (\text{Sub-score}_i \times \text{Weight}_i)$$
 
 Keywords pass through a strict 4-stage matching hierarchy:
 1. **Exact Match (`exact_matcher.py`):** Case-insensitive, whitespace-normalized equality.
-2. **Synonym Match (`synonym_map.py`):** Lookups against canonical technical dictionary (e.g., "React.js" $\leftrightarrow$ "ReactJS" $\leftrightarrow$ "React").
+2. **Taxonomy Match (`taxonomy_service.py`):** Alias canonicalization plus parent/child and high-transferability relationships (e.g., "React.js" $\leftrightarrow$ "ReactJS" $\leftrightarrow$ "React").
 3. **Fuzzy Match (`fuzzy_matcher.py`):** RapidFuzz `WRatio` token matching against configurable threshold (default `85`).
 4. **Semantic Match (`semantic_matcher.py`):** Vector cosine similarity pass (used when embedding provider is enabled).
 

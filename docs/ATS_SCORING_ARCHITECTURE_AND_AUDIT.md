@@ -67,14 +67,14 @@ flowchart TD
 
     I -->|Yes| J[Extract ResumeExtraction + JDExtraction]
     J --> K[requirement_taxonomy]
-    K --> K1[Resume evidence = explicit hard skills + domain terms]
+    K --> K1[Resume evidence = recognized taxonomy skills]
     K --> K2[Required technical skills = skills-score denominator]
-    K --> K3[Preferred/domain terms = keyword coverage]
-    K --> K4[Culture signals = feedback only]
+    K --> K3[Tools = preferred evidence only]
+    K --> K4[Unknown/culture terms = feedback only]
 
-    I -->|No / invalid output| L[Naive keyword_extractor + skill_extractor fallback]
-    L --> M[All non-stopword JD tokens become keyword candidates]
-    L --> N[Known skills-list matches become required skills]
+    I -->|No / invalid output| L[Taxonomy-only fallback extraction]
+    L --> M[Recognized skills become JD candidates]
+    L --> N[Only full-weight technical categories become required skills]
 
     H --> O[experience_extractor]
     H --> P[education_extractor]
@@ -149,17 +149,17 @@ This is an important correction: a candidate should not lose technical-skill poi
 
 If either LLM extraction call fails, the whole entity extraction stage falls back:
 
-- `keyword_extractor` tokenizes all text and removes only its stopword list.
-- `skill_extractor` recognizes aliases in `reference_data/skills_list.py`.
+- `keyword_extractor` returns only skills recognized by the Tanova taxonomy.
+- Unknown prose never enters the fallback keyword or skills denominator.
 
-The fallback remains deterministic and keeps the endpoint alive, but it is substantially less precise. A prose-heavy JD produces many generic keyword candidates, which enlarges the keyword denominator and reduces keyword coverage.
+The fallback remains deterministic and keeps the endpoint alive without allowing a prose-heavy JD to enlarge technical score denominators.
 
 ### Match stages
 
 The matcher consumes lists, not entire sentences. Each matched JD term can be consumed only once.
 
 1. Exact case-insensitive match.
-2. Synonym-group match from `synonym_map.py`.
+2. Taxonomy alias, hierarchy, or high-transferability match from `taxonomy_service.py`.
 3. Fuzzy match using RapidFuzz `WRatio >= 82`.
 4. Semantic match using `all-MiniLM-L6-v2` and cosine similarity `>= 0.60`.
 
@@ -189,15 +189,15 @@ For every semantic candidate, the backend logs the top three closest unmatched J
 
 **Effect:** Lowering the threshold can increase matches, but it can also create false positives. For example, Python does not prove functional-programming experience; cloud computing does not prove edge-computing experience. This should not be used to force the overall score above an expected number.
 
-**Current safeguard:** The synonym map does not map Python directly to functional programming. The taxonomy also excludes culture language from skill coverage.
+**Current safeguard:** Taxonomy transferability is limited to scores of 0.75 or higher, and semantic results remain advisory rather than score-bearing. Culture language is excluded from skill coverage.
 
-### P1 — The fallback keyword denominator is too broad
+### Resolved — taxonomy-only fallback denominator
 
-**Evidence:** `keyword_extractor.extract()` returns most non-stopword tokens from the full JD. Its output becomes `jd_keywords` during fallback.
+**Implementation:** `keyword_extractor.extract()` now returns only canonical skills recognized by `taxonomy_service.py`. The fallback routes tools to preferred evidence and excludes unknown prose.
 
-**Effect:** Words such as company/domain/product language may be counted alongside real technical requirements. This depresses `keyword_score` and makes the “missing keywords” list noisy.
+**Effect:** Company, product, and generic language cannot become keyword or skills-score requirements when AI extraction is unavailable.
 
-**Observed behavior:** A concise structured LLM output should yield about 10–25 terms; fallback can yield many more arbitrary tokens. This is the most direct implementation-level reason a keyword score can drop sharply when LLM extraction is unavailable.
+**Verification:** Regression coverage confirms generic terms such as `leading`, `global`, and `enthusiastic` are discarded while `Python` and `EC2` remain recognized technical evidence.
 
 ### P1 — A duplicate embedding model is loaded for the skills score
 

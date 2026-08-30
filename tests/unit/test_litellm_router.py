@@ -62,7 +62,7 @@ def mock_success_response():
                 )
             )
         ],
-        model="gemini/gemini-3.5-flash",
+        model="gemini/gemini-3.1-flash-lite",
         usage={"prompt_tokens": 100, "completion_tokens": 200, "total_tokens": 300}
     )
 
@@ -78,7 +78,7 @@ class TestRouterConfig:
 
         # Verify model names exist
         model_names = [m["model_name"] for m in config["model_list"]]
-        assert "gemini-3.5-flash" in model_names
+        assert "gemini-3.1-flash-lite" in model_names
         assert "gemini-3.1-flash-lite" in model_names
         assert "llama-3.1-8b-instant" in model_names
 
@@ -102,7 +102,7 @@ class TestLiteLLMRouting:
         # Should only call primary model
         assert mock_completion.call_count == 1
         called_model = mock_completion.call_args[1].get("model")
-        assert called_model == "gemini/gemini-3.5-flash"
+        assert called_model == "gemini/gemini-3.1-flash-lite"
         assert result.content == MOCK_EXPLANATION_JSON
 
     @patch("litellm.completion")
@@ -110,7 +110,7 @@ class TestLiteLLMRouting:
         """Primary deployment fails, router automatically falls back to secondary Gemini Lite."""
         def side_effect(*args, **kwargs):
             model = kwargs.get("model")
-            if model == "gemini/gemini-3.5-flash":
+            if model == "gemini/gemini-3.1-flash-lite":
                 raise ServiceUnavailableError(
                     message="Google rate limit or timeout",
                     llm_provider="gemini",
@@ -131,7 +131,7 @@ class TestLiteLLMRouting:
         expected_total_calls = expected_primary_calls + 1
         assert mock_completion.call_count == expected_total_calls
         calls = [call[1].get("model") for call in mock_completion.call_args_list]
-        assert calls[0] == "gemini/gemini-3.5-flash"
+        assert calls[0] == "gemini/gemini-3.1-flash-lite"
         assert calls[-1] == "gemini/gemini-3.1-flash-lite"
         assert result.content == MOCK_EXPLANATION_JSON
 
@@ -140,7 +140,7 @@ class TestLiteLLMRouting:
         """Both Gemini deployments fail, router falls back to Groq Llama."""
         def side_effect(*args, **kwargs):
             model = kwargs.get("model")
-            if "gemini-3.5-flash" in model or "gemini-3.1-flash-lite" in model:
+            if "gemini-3.1-flash-lite" in model or "gemini-3.1-flash-lite" in model:
                 raise ServiceUnavailableError(
                     message="Service Unavailable",
                     llm_provider="gemini",
@@ -161,7 +161,7 @@ class TestLiteLLMRouting:
         expected_total_calls = expected_gemini_calls + 1
         assert mock_completion.call_count == expected_total_calls
         calls = [call[1].get("model") for call in mock_completion.call_args_list]
-        assert calls[0] == "gemini/gemini-3.5-flash"
+        assert calls[0] == "gemini/gemini-3.1-flash-lite"
         assert calls[-1] == "groq/llama-3.1-8b-instant"
         assert result.content == MOCK_EXPLANATION_JSON
 
@@ -202,7 +202,7 @@ class TestIntegrationRouting:
         """Integration test for the explain_score chain executing router fallbacks successfully."""
         def side_effect(*args, **kwargs):
             model = kwargs.get("model")
-            if model == "gemini/gemini-3.5-flash":
+            if model == "gemini/gemini-3.1-flash-lite":
                 raise ServiceUnavailableError(
                     message="Timeout simulation",
                     llm_provider="gemini",

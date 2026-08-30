@@ -3,7 +3,7 @@
 This module orchestrates the four-step keyword matching pipeline:
 
   Step 1 — Exact matching    (exact_matcher)
-  Step 2 — Synonym matching  (synonym_map)
+  Step 2 — Taxonomy relationship matching
   Step 3 — Fuzzy matching    (fuzzy_matcher)
   Step 4 — Semantic matching (semantic_matcher)  [optional, requires provider]
 
@@ -29,8 +29,9 @@ matchType values: ``"EXACT"`` | ``"SYNONYM"`` | ``"FUZZY"`` | ``"SEMANTIC"``
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Callable, Literal
 
 from app.analysis.matching import exact_matcher, fuzzy_matcher
 from app.analysis.matching.exact_matcher import normalise
@@ -39,7 +40,7 @@ from app.analysis.matching.semantic_matcher import (
     SemanticMatchResult,
     match_unresolved,
 )
-from app.analysis.matching.synonym_map import SYNONYMS
+from app.services.taxonomy_service import TaxonomyService, get_taxonomy_service
 
 # ---------------------------------------------------------------------------
 # Types
@@ -84,24 +85,12 @@ class MatchResult:
     """Embedding-derived related concepts; never score-bearing."""
 
 
-# ---------------------------------------------------------------------------
-# Build synonym lookup at import time
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class _TaxonomyTerm:
+    """A caller-visible term paired with its taxonomy-normalized value."""
 
-_ALIAS_TO_CANONICAL: dict[str, set[str]] = {}
-for _canonical, _aliases in SYNONYMS.items():
-    for _alias in _aliases:
-        _ALIAS_TO_CANONICAL.setdefault(_alias, set()).add(_canonical)
-
-
-def _synonym_canonicals(keyword: str) -> set[str]:
-    """Return every synonym group containing ``keyword``.
-
-    Some aliases, such as ``terraform`` and ``github actions``, are valid in
-    more than one group. Keeping every group prevents later map entries from
-    silently overwriting earlier groups during module import.
-    """
-    return _ALIAS_TO_CANONICAL.get(normalise(keyword), set())
+    original: str
+    normalized: str
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +109,7 @@ def match(
 
     Steps run in strict order:
       1. Exact — case-insensitive, whitespace-normalised equality.
-      2. Synonym — canonical-form lookup via ``synonym_map.SYNONYMS``.
+      2. Taxonomy relationship — parent/child and related-skill graph lookup.
       3. Fuzzy — rapidfuzz WRatio with ``fuzzy_threshold``.
       4. Semantic — cosine similarity via ``embedding_provider`` (optional).
 
@@ -139,62 +128,86 @@ def match(
     Returns:
         ``MatchResult`` with matched, missing, and optionally unresolved lists.
     """
+    taxonomy = get_taxonomy_service()
     result = MatchResult()
-    remaining_resume = list(resume_keywords)
-    remaining_jd = list(jd_keywords)
+    remaining_resume = _normalise_terms(resume_keywords, taxonomy.normalize)
+    remaining_jd = _normalise_terms(jd_keywords, taxonomy.normalize)
 
     # ── Step 1: Exact ───────────────────────────────────────────────────────
-    exact_matched, remaining_resume, remaining_jd = exact_matcher.match_all(
-        remaining_resume, remaining_jd
+    exact_matched, _, _ = exact_matcher.match_all(
+        [term.normalized for term in remaining_resume],
+        [term.normalized for term in remaining_jd],
     )
-    for rk, jd_kw in exact_matched:
+    exact_pairs, remaining_resume, remaining_jd = _consume_pairs(
+        remaining_resume, remaining_jd, exact_matched
+    )
+    for resume_term, jd_term in exact_pairs:
         result.matched.append(
-            MatchedKeyword(keyword=rk, matchType="EXACT", matched_jd_keyword=jd_kw)
+            MatchedKeyword(
+                keyword=resume_term.original,
+                matchType="EXACT",
+                matched_jd_keyword=jd_term.original,
+            )
         )
 
-    # ── Step 2: Synonym ─────────────────────────────────────────────────────
-    still_unmatched: list[str] = []
-    for rk in remaining_resume:
-        jd_match = _synonym_match(rk, remaining_jd)
+    # ── Step 2: Taxonomy relationship ───────────────────────────────────────
+    still_unmatched: list[_TaxonomyTerm] = []
+    for resume_term in remaining_resume:
+        jd_match = _taxonomy_match(resume_term, remaining_jd, taxonomy)
         if jd_match is not None:
             result.matched.append(
-                MatchedKeyword(keyword=rk, matchType="SYNONYM", matched_jd_keyword=jd_match)
+                MatchedKeyword(
+                    keyword=resume_term.original,
+                    matchType="SYNONYM",
+                    matched_jd_keyword=jd_match.original,
+                )
             )
             remaining_jd.remove(jd_match)
         else:
-            still_unmatched.append(rk)
+            still_unmatched.append(resume_term)
     remaining_resume = still_unmatched
 
     # ── Step 3: Fuzzy ───────────────────────────────────────────────────────
-    fuzzy_matched, remaining_resume, remaining_jd = fuzzy_matcher.match_all(
-        remaining_resume, remaining_jd, fuzzy_threshold
+    fuzzy_matched, _, _ = fuzzy_matcher.match_all(
+        [term.normalized for term in remaining_resume],
+        [term.normalized for term in remaining_jd],
+        fuzzy_threshold,
     )
-    for rk, jd_kw in fuzzy_matched:
+    fuzzy_pairs, remaining_resume, remaining_jd = _consume_pairs(
+        remaining_resume, remaining_jd, fuzzy_matched
+    )
+    for resume_term, jd_term in fuzzy_pairs:
         result.matched.append(
-            MatchedKeyword(keyword=rk, matchType="FUZZY", matched_jd_keyword=jd_kw)
+            MatchedKeyword(
+                keyword=resume_term.original,
+                matchType="FUZZY",
+                matched_jd_keyword=jd_term.original,
+            )
         )
 
     # ── Step 4: Semantic (optional) ─────────────────────────────────────────
     if embedding_provider is not None and remaining_resume:
+        semantic_jd_terms = list(remaining_jd)
         kwargs: dict = {}
         if semantic_threshold is not None:
             kwargs["threshold"] = semantic_threshold
 
-        semantic_results, remaining_jd = match_unresolved(
-            resume_keywords=remaining_resume,
-            jd_keywords=remaining_jd,
+        semantic_results, semantic_remaining_jd = match_unresolved(
+            resume_keywords=[term.normalized for term in remaining_resume],
+            jd_keywords=[term.normalized for term in semantic_jd_terms],
             provider=embedding_provider,
             consume_matches=False,
             **kwargs,
         )
-        _apply_semantic_results(result, semantic_results)
+        _apply_semantic_results(result, semantic_results, remaining_resume, semantic_jd_terms)
+        remaining_jd = _remaining_terms(semantic_jd_terms, semantic_remaining_jd)
         remaining_resume = []  # semantic pass classifies every keyword
     else:
         # No provider — unresolved keywords are returned as-is
-        result.unresolved = remaining_resume
+        result.unresolved = [term.original for term in remaining_resume]
         remaining_resume = []
 
-    result.missing = remaining_jd
+    result.missing = [term.original for term in remaining_jd]
     return result
 
 
@@ -203,29 +216,73 @@ def match(
 # ---------------------------------------------------------------------------
 
 
-def _synonym_match(resume_keyword: str, jd_keywords: list[str]) -> str | None:
-    """Return the JD keyword that shares a synonym group with ``resume_keyword``.
+def _normalise_terms(
+    terms: list[str], normalise_taxonomy: Callable[[str], str]
+) -> list[_TaxonomyTerm]:
+    """Preserve display values while canonicalizing matcher inputs."""
+    return [
+        _TaxonomyTerm(original=term, normalized=normalise_taxonomy(term))
+        for term in terms
+    ]
 
-    Args:
-        resume_keyword: A single resume keyword (already failed exact match).
-        jd_keywords: JD keywords still available for matching.
 
-    Returns:
-        Matching JD keyword string, or ``None``.
-    """
-    resume_canonicals = _synonym_canonicals(resume_keyword)
-    if not resume_canonicals:
-        return None
-    for jd_kw in jd_keywords:
-        jd_canonicals = _synonym_canonicals(jd_kw)
-        if resume_canonicals.intersection(jd_canonicals):
-            return jd_kw
+def _remaining_terms(
+    terms: list[_TaxonomyTerm], remaining_values: list[str]
+) -> list[_TaxonomyTerm]:
+    """Map a matcher remainder back to its original display values."""
+    remaining_counts = Counter(normalise(value) for value in remaining_values)
+    result: list[_TaxonomyTerm] = []
+    for term in terms:
+        key = normalise(term.normalized)
+        if remaining_counts[key] > 0:
+            remaining_counts[key] -= 1
+            result.append(term)
+    return result
+
+
+def _consume_pairs(
+    resume_terms: list[_TaxonomyTerm],
+    jd_terms: list[_TaxonomyTerm],
+    pairs: list[tuple[str, str]],
+) -> tuple[list[tuple[_TaxonomyTerm, _TaxonomyTerm]], list[_TaxonomyTerm], list[_TaxonomyTerm]]:
+    """Map exact/fuzzy canonical pairs back to originals without changing pairs."""
+    remaining_resume = list(resume_terms)
+    remaining_jd = list(jd_terms)
+    resolved: list[tuple[_TaxonomyTerm, _TaxonomyTerm]] = []
+
+    for resume_value, jd_value in pairs:
+        resume_index = next(
+            index
+            for index, term in enumerate(remaining_resume)
+            if normalise(term.normalized) == normalise(resume_value)
+        )
+        jd_index = next(
+            index
+            for index, term in enumerate(remaining_jd)
+            if normalise(term.normalized) == normalise(jd_value)
+        )
+        resolved.append((remaining_resume.pop(resume_index), remaining_jd.pop(jd_index)))
+
+    return resolved, remaining_resume, remaining_jd
+
+
+def _taxonomy_match(
+    resume_term: _TaxonomyTerm,
+    jd_terms: list[_TaxonomyTerm],
+    taxonomy: TaxonomyService,
+) -> _TaxonomyTerm | None:
+    """Return a deterministic parent/child or related taxonomy match."""
+    for jd_term in jd_terms:
+        if taxonomy.are_related(resume_term.normalized, jd_term.normalized):
+            return jd_term
     return None
 
 
 def _apply_semantic_results(
     result: MatchResult,
     semantic_results: list[SemanticMatchResult],
+    resume_terms: list[_TaxonomyTerm],
+    jd_terms: list[_TaxonomyTerm],
 ) -> None:
     """Merge semantic match results into ``result`` in place.
 
@@ -236,14 +293,18 @@ def _apply_semantic_results(
         result: The ``MatchResult`` being built.
         semantic_results: Output from ``semantic_matcher.match_unresolved()``.
     """
+    resume_originals = {term.normalized: term.original for term in resume_terms}
+    jd_originals = {term.normalized: term.original for term in jd_terms}
     for sr in semantic_results:
         if sr.matched:
             result.related.append(
                 MatchedKeyword(
-                    keyword=sr.keyword,
+                    keyword=resume_originals.get(sr.keyword, sr.keyword),
                     matchType="RELATED",
                     similarity=sr.similarity,
-                    matched_jd_keyword=sr.matched_jd_keyword,
+                    matched_jd_keyword=jd_originals.get(
+                        sr.matched_jd_keyword or "", sr.matched_jd_keyword
+                    ),
                     is_related_concept=True,
                 )
             )

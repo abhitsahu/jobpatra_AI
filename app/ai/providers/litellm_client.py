@@ -158,7 +158,7 @@ class JobPatraRoutedChat(ChatLiteLLMRouter):
                     provider = model_used
 
             # Determine if fallback was used (compared to primary model)
-            primary_model = "gemini/gemini-3.5-flash"
+            primary_model = "gemini/gemini-3.1-flash-lite"
             if self.router and self.router.model_list:
                 primary_model = self.router.model_list[0].get("litellm_params", {}).get("model", primary_model)
 
@@ -237,7 +237,7 @@ def get_chat_model() -> ChatLiteLLMRouter:
         **router_settings
     )
 
-    model_alias = config.get("default_model_alias", "gemini-3.5-flash")
+    model_alias = config.get("default_model_alias", "gemini-3.1-flash-lite")
     temperature = float(os.getenv("LLM_TEMPERATURE", "0.2"))
     max_tokens = int(os.getenv("LLM_MAX_TOKENS", "1024"))
 

@@ -22,19 +22,19 @@ class TestJDRequirementTaxonomy:
             )
         )
 
-        assert taxonomy.required_technical_skills == ["React", "API Integration"]
-        assert taxonomy.preferred_technical_skills == ["Kafka"]
-        assert taxonomy.domain_terms == ["Payment Orchestration"]
-        assert taxonomy.culture_signals == [
-            "Problem Solving",
+        assert taxonomy.required_technical_skills == ["React", "API Integration", "Apache Kafka"]
+        assert taxonomy.preferred_technical_skills == []
+        assert taxonomy.domain_terms == []
+        assert taxonomy.feedback_only == [
+            "Payment Orchestration",
             "First Principles Thinking",
             "Passion for Reliability",
+            "Problem Solving",
         ]
         assert taxonomy.keyword_requirements == [
             "React",
             "API Integration",
-            "Kafka",
-            "Payment Orchestration",
+            "Apache Kafka",
         ]
 
     def test_resume_technical_evidence_excludes_soft_skills(self) -> None:
@@ -46,7 +46,7 @@ class TestJDRequirementTaxonomy:
             )
         )
 
-        assert evidence == ["Python", "React", "Microservices"]
+        assert evidence == ["Python", "React", "Microservices Architecture"]
 
     def test_misclassified_culture_signal_cannot_enter_skill_denominator(self) -> None:
         taxonomy = classify_jd_requirements(

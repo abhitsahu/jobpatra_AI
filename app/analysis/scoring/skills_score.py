@@ -6,7 +6,7 @@ Fuzzy, and optional Semantic).
 
 Formula
 -------
-    score = (matched_skills_count / required_skills_count) × 100
+    score = (sum(matched skill weights) / sum(required skill weights)) × 100
 
 All functions are pure. No I/O. No AI. No FastAPI.
 """
@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from app.analysis.matching import keyword_matcher
 from app.analysis.matching.keyword_matcher import MatchResult
+from app.services.taxonomy_service import get_taxonomy_service
 
 if TYPE_CHECKING:
     from app.analysis.matching.semantic_matcher import EmbeddingProvider
@@ -62,30 +63,48 @@ def evaluate(
     embedding_provider: EmbeddingProvider | None = None,
     semantic_threshold: float | None = 0.60,
 ) -> SkillScoreResult:
-    """Match required technical skills once and return its score and evidence."""
-    if not required_skills:
+    """Match weighted, score-bearing requirements once and return evidence."""
+    taxonomy = get_taxonomy_service()
+    scoreable_required = list(
+        dict.fromkeys(
+            taxonomy.normalize(skill)
+            for skill in required_skills
+            if taxonomy.get_weight(skill) >= 0.3
+        )
+    )
+    if not scoreable_required:
         return SkillScoreResult(0.0, MatchResult(), 0)
 
     if not resume_skills:
         return SkillScoreResult(
             0.0,
-            MatchResult(missing=list(required_skills)),
-            len(required_skills),
+            MatchResult(missing=list(scoreable_required)),
+            len(scoreable_required),
         )
 
     match_result = keyword_matcher.match(
         resume_keywords=resume_skills,
-        jd_keywords=required_skills,
+        jd_keywords=scoreable_required,
         embedding_provider=embedding_provider,
         semantic_threshold=semantic_threshold,
     )
 
-    matched_count = len(match_result.matched)
-    score = (matched_count / len(required_skills)) * 100.0
+    denominator = sum(taxonomy.get_weight(skill) for skill in scoreable_required)
+    matched_requirements = {
+        match.matched_jd_keyword
+        for match in match_result.matched
+        if match.matched_jd_keyword is not None
+    }
+    numerator = sum(
+        taxonomy.get_weight(skill)
+        for skill in scoreable_required
+        if skill in matched_requirements
+    )
+    score = (numerator / denominator) * 100.0 if denominator else 0.0
     return SkillScoreResult(
         score=_clamp(score),
         match_result=match_result,
-        required_skill_count=len(required_skills),
+        required_skill_count=len(scoreable_required),
     )
 
 

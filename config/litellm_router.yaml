@@ -12,9 +12,9 @@ max_failures: 3 # Number of consecutive failures before marking unhealthy
 
 # Supported deployments
 model_list:
-  - model_name: "gemini-3.5-flash"
+  - model_name: "gemini-3.1-flash-lite"
     litellm_params:
-      model: "gemini/gemini-3.5-flash"
+      model: "gemini/gemini-3.1-flash-lite"
       api_key: "os.environ/GOOGLE_API_KEY"
       rpm: 15
       timeout: 10.0
@@ -36,8 +36,8 @@ model_list:
 
 # Fallback definitions
 fallbacks:
-  - "gemini-3.5-flash": ["gemini-3.1-flash-lite", "llama-3.1-8b-instant"]
+  - "gemini-3.1-flash-lite": ["gemini-3.1-flash-lite", "llama-3.1-8b-instant"]
   - "gemini-3.1-flash-lite": ["llama-3.1-8b-instant"]
 
 # Default model alias used by the application
-default_model_alias: "gemini-3.5-flash"
+default_model_alias: "gemini-3.1-flash-lite"

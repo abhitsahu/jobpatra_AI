@@ -37,6 +37,7 @@ from datetime import datetime
 from app.analysis.extraction import (
     education_extractor,
     experience_extractor,
+    keyword_extractor,
 )
 from app.analysis.extraction.requirement_taxonomy import (
     classify_jd_requirements,
@@ -61,6 +62,7 @@ from app.core.errors import AIGenerationError, InvalidInputError, ValidationErro
 from app.core.logging import logger
 from app.core.config import settings
 from app.middleware.request_id_middleware import get_request_id
+from app.services.taxonomy_service import TaxonomyService, get_taxonomy_service
 from app.schemas.ats import (
     ATSAnalyzeRequest,
     ATSAnalyzeResponse,
@@ -71,8 +73,9 @@ from app.schemas.ats import (
 
 def _get_rejected_tokens(text: str) -> list[tuple[str, str]]:
     import re
-    from app.analysis.extraction.keyword_extractor import _STOP_WORDS
+    from app.services.taxonomy_service import get_taxonomy_service
     tokens = re.findall(r"[A-Za-z][A-Za-z0-9.#+\-_]*", text)
+    taxonomy = get_taxonomy_service()
     rejected = []
     seen = set()
     whitelist = {"C++", "C#", "F#", "AWS", "SQL"}
@@ -83,8 +86,8 @@ def _get_rejected_tokens(text: str) -> list[tuple[str, str]]:
         seen.add(t_clean)
         if len(t_clean) <= 1:
             rejected.append((t_clean, "Length <= 1"))
-        elif t_clean.lower() in _STOP_WORDS:
-            rejected.append((t_clean, "Stop word"))
+        elif taxonomy.get_category(t_clean) == "unknown":
+            rejected.append((t_clean, "Unknown taxonomy term"))
         else:
             alphas = sum(1 for c in t_clean if c.isalpha())
             ratio = alphas / len(t_clean) if t_clean else 0.0
@@ -568,7 +571,12 @@ def analyze(request: ATSAnalyzeRequest) -> ATSAnalyzeResponse:
         t_start = debugger.start_stage("entity_extraction", "Entity Extraction")
         try:
             _log("Extracting entity data using Hybrid AI (with fallback)")
-            entities = _extract_entities_hybrid(resume_clean, jd_clean, logger_fn=_log)
+            entities = _extract_entities_hybrid(
+                resume_clean,
+                jd_clean,
+                skills_section=sections.skills,
+                logger_fn=_log,
+            )
             resume_keywords = entities.resume_keywords
             resume_skills = entities.resume_skills
             jd_keywords = entities.jd_keywords
@@ -802,7 +810,12 @@ async def analyze_stream(
         t_start = debugger.start_stage("entity_extraction", "Entity Extraction")
         try:
             _log("Extracting entity data using Hybrid AI (with fallback)")
-            entities = _extract_entities_hybrid(resume_clean, jd_clean, logger_fn=_log)
+            entities = _extract_entities_hybrid(
+                resume_clean,
+                jd_clean,
+                skills_section=sections.skills,
+                logger_fn=_log,
+            )
             resume_keywords = entities.resume_keywords
             resume_skills = entities.resume_skills
             jd_keywords = entities.jd_keywords
@@ -975,6 +988,7 @@ class ExtractedATSEntities:
 def _extract_entities_hybrid(
     resume_clean: str,
     jd_clean: str,
+    skills_section: str | None = None,
     logger_fn: typing.Callable[[str], None] | None = None,
 ) -> ExtractedATSEntities:
     """Extract keywords and skills using Hybrid AI Agent extraction with fallback.
@@ -983,20 +997,25 @@ def _extract_entities_hybrid(
         Score-ready entities, with culture signals excluded from score inputs.
     """
     log = logger_fn or (lambda msg: None)
+    deterministic_skills = keyword_extractor.extract_from_skills_section(skills_section or "")
     try:
         log("Attempting Hybrid AI entity extraction")
         resume_ext = extract_resume_entities(resume_clean)
         jd_ext = extract_jd_entities(jd_clean)
 
         taxonomy = classify_jd_requirements(jd_ext)
-        r_skills = resume_technical_evidence(resume_ext)
-        r_keywords = r_skills + [
-            item for item in resume_ext.soft_skills if item.lower() not in {skill.lower() for skill in r_skills}
-        ]
-        j_keywords = taxonomy.keyword_requirements
-        req_skills = taxonomy.required_technical_skills
+        taxonomy_service = get_taxonomy_service()
+        r_skills = _normalise_taxonomy_terms(
+            [*deterministic_skills, *resume_technical_evidence(resume_ext)], taxonomy_service
+        )
+        r_keywords = list(r_skills)
+        j_keywords = _normalise_taxonomy_terms(taxonomy.keyword_requirements, taxonomy_service)
+        req_skills = _normalise_taxonomy_terms(taxonomy.required_technical_skills, taxonomy_service)
 
-        log(f"[Hybrid AI] Extracted {len(r_keywords)} resume keywords, {len(j_keywords)} JD keywords")
+        log(
+            f"[Hybrid AI] Extracted {len(r_keywords)} merged resume keywords "
+            f"({len(deterministic_skills)} from Skills section), {len(j_keywords)} JD keywords"
+        )
         log(
             f"[Hybrid AI] Scoring {len(req_skills)} required technical skills; "
             f"retaining {len(taxonomy.culture_signals)} culture signals for feedback"
@@ -1022,10 +1041,13 @@ def _extract_entities_hybrid(
         resume_ext = fallback_resume_extraction(resume_clean)
         jd_ext = fallback_jd_extraction(jd_clean)
         taxonomy = classify_jd_requirements(jd_ext)
-        r_skills = resume_technical_evidence(resume_ext)
+        taxonomy_service = get_taxonomy_service()
+        r_skills = _normalise_taxonomy_terms(
+            [*deterministic_skills, *resume_technical_evidence(resume_ext)], taxonomy_service
+        )
         r_keywords = list(r_skills)
-        j_keywords = taxonomy.keyword_requirements
-        req_skills = taxonomy.required_technical_skills
+        j_keywords = _normalise_taxonomy_terms(taxonomy.keyword_requirements, taxonomy_service)
+        req_skills = _normalise_taxonomy_terms(taxonomy.required_technical_skills, taxonomy_service)
 
         return ExtractedATSEntities(
             resume_keywords=r_keywords,
@@ -1037,6 +1059,19 @@ def _extract_entities_hybrid(
             required_education_level=jd_ext.required_education_level,
             extraction_mode="deterministic_fallback",
         )
+
+
+def _normalise_taxonomy_terms(terms: list[str], taxonomy: TaxonomyService) -> list[str]:
+    """Canonicalize and de-duplicate extracted terms before ATS matching."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        canonical = taxonomy.normalize(term)
+        key = canonical.casefold()
+        if canonical and key not in seen:
+            seen.add(key)
+            normalized.append(canonical)
+    return normalized
 
 
 def _parse_resume(request: ATSAnalyzeRequest) -> str:

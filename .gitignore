@@ -17,3 +17,4 @@ config/.env
 !README.md
 !docs/
 !docs/*.md
+!data/TANOVA_ATTRIBUTION.md

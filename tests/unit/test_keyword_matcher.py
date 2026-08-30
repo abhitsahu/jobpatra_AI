@@ -19,7 +19,7 @@ class TestCompletePipeline:
         JD:      React, Node.js, Docker, AWS
         Expected:
           React  → EXACT
-          NodeJS → SYNONYM (NodeJS is an alias for Node.js)
+          NodeJS → EXACT (both aliases normalize to the same taxonomy skill)
           Docker → EXACT
           AWS    → MISSING (not in resume)
         """
@@ -30,7 +30,7 @@ class TestCompletePipeline:
         match_map = {m.keyword.lower(): m.matchType for m in result.matched}
 
         assert match_map.get("react") == "EXACT"
-        assert match_map.get("nodejs") == "SYNONYM"
+        assert match_map.get("nodejs") == "EXACT"
         assert match_map.get("docker") == "EXACT"
         assert "AWS" in result.missing
 
@@ -40,8 +40,6 @@ class TestCompletePipeline:
         JD:      JavaScript
         Expected: FUZZY match (Javascript is not an exact or synonym match)
         """
-        # "Javascript" with capital J but lowercase s is not in synonym_map
-        # as a distinct alias from "javascript". Let's use a clear typo.
         result: MatchResult = keyword_matcher.match(
             resume_keywords=["Docekr"],
             jd_keywords=["Docker"],
@@ -87,7 +85,7 @@ class TestMatchType:
 
     def test_synonym_match_type(self) -> None:
         result = keyword_matcher.match(["nodejs"], ["Node.js"])
-        assert result.matched[0].matchType == "SYNONYM"
+        assert result.matched[0].matchType == "EXACT"
 
     def test_fuzzy_match_type(self) -> None:
         result = keyword_matcher.match(["Mangodb"], ["MongoDB"])
@@ -126,21 +124,21 @@ class TestMissingAndUnresolved:
 
 
 class TestPipelineOrder:
-    """Verify that Exact fires before Synonym and Synonym before Fuzzy."""
+    """Verify that Exact fires before taxonomy relationships and fuzzy matching."""
 
     def test_exact_wins_over_synonym(self) -> None:
-        """If a keyword matches exactly, it must be EXACT not SYNONYM."""
+        """If a keyword matches exactly, it must be EXACT not a relationship."""
         # "Node.js" matches "Node.js" exactly before any synonym lookup
         result = keyword_matcher.match(["Node.js"], ["Node.js"])
         assert result.matched[0].matchType == "EXACT"
 
-    def test_synonym_fires_only_after_exact_fails(self) -> None:
-        """'nodejs' cannot match 'Node.js' exactly → must fall to SYNONYM."""
-        result = keyword_matcher.match(["nodejs"], ["Node.js"])
+    def test_relationship_fires_only_after_exact_fails(self) -> None:
+        """A taxonomy parent/child relation runs only after canonical exact match."""
+        result = keyword_matcher.match(["EC2"], ["AWS"])
         assert result.matched[0].matchType == "SYNONYM"
 
     def test_fuzzy_fires_only_after_synonym_fails(self) -> None:
-        """'Docekr' is not in the synonym map → must fall to FUZZY."""
+        """An unknown typo has no taxonomy relation and falls to fuzzy matching."""
         result = keyword_matcher.match(["Docekr"], ["Docker"])
         assert result.matched[0].matchType == "FUZZY"
 

@@ -254,7 +254,7 @@ class TestKeywordMatcherWithSemantic:
         JD:      React, Node.js, REST API, AWS
         Expected:
           React          → EXACT
-          NodeJS         → SYNONYM
+          NodeJS         → EXACT
           RESTful Services → SEMANTIC
           AWS            → MISSING
         """
@@ -266,7 +266,7 @@ class TestKeywordMatcherWithSemantic:
         match_map = {m.keyword: m.matchType for m in result.matched}
 
         assert match_map.get("React") == "EXACT"
-        assert match_map.get("NodeJS") == "SYNONYM"
+        assert match_map.get("NodeJS") == "EXACT"
         assert match_map.get("RESTful Services") is None
         assert result.related[0].keyword == "RESTful Services"
         assert result.related[0].matched_jd_keyword == "REST API"

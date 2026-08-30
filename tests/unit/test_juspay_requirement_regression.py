@@ -1,67 +1,57 @@
-"""Regression coverage for the Juspay backend-role requirement taxonomy.
-
-This test uses the stable entities observed in the Abhit Sahu/Juspay run. It
-does not call an LLM or read the candidate's source document.
-"""
+"""Regression coverage for taxonomy-backed ATS requirement scoring."""
 
 from app.analysis.extraction.requirement_taxonomy import (
     classify_jd_requirements,
-    resume_technical_evidence,
+    fallback_jd_extraction,
 )
-from app.analysis.matching.semantic_matcher import EmbeddingProvider
+from app.analysis.matching import keyword_matcher
 from app.analysis.scoring.skills_score import evaluate
-from app.schemas.extraction import JDExtraction, ResumeExtraction
+from app.schemas.extraction import JDExtraction
+from app.services.taxonomy_service import get_taxonomy_service
 
 
-class ZeroEmbeddingProvider(EmbeddingProvider):
-    """Deterministic provider that prevents semantic matches in this test."""
+def test_taxonomy_normalizes_aliases_and_resolves_related_technical_skills() -> None:
+    """Aliases and graph relations replace the former manual synonym map."""
+    taxonomy = get_taxonomy_service()
+    assert taxonomy.normalize("ReactJS") == "React"
+    assert taxonomy.are_related("Git", "GitHub")
+    assert taxonomy.are_related("Pydantic", "FastAPI")
+    assert taxonomy.is_parent_of("EC2", "AWS")
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        return [[0.0, 0.0, 0.0] for _ in texts]
-
-
-def test_juspay_technical_coverage_excludes_culture_signals() -> None:
-    """Only five explicit technical requirements form the skills denominator."""
-    resume = ResumeExtraction(
-        hard_skills=["Python", "React.js", "FastAPI", "AWS"],
-        domain_terms=["Microservices", "API Integration", "Infrastructure as Code"],
+    result = keyword_matcher.match(
+        resume_keywords=["Git", "Pydantic", "EC2"],
+        jd_keywords=["GitHub", "FastAPI", "AWS"],
     )
+    assert len(result.matched) == 3
+    assert result.missing == []
+
+
+def test_tools_and_fluff_do_not_lower_juspay_skill_coverage() -> None:
+    """Only score-bearing taxonomy requirements may enter ATS denominators."""
     job_description = JDExtraction(
-        required_hard_skills=[
-            "Functional Programming",
-            "API Integration",
-            "Distributed Systems",
-            "React",
-            "System Architecture",
-        ],
-        required_soft_skills=["Problem Solving"],
-        domain_terms=[
-            "Payment Orchestration",
-            "First Principles Thinking",
-            "Passion for Reliability",
-        ],
+        required_hard_skills=["Python", "Black", "enthusiastic", "global"],
+        domain_terms=["Payment Orchestration", "Microservices"],
+        required_soft_skills=["First Principles Thinking"],
     )
 
-    taxonomy = classify_jd_requirements(job_description)
-    result = evaluate(
-        resume_technical_evidence(resume),
-        taxonomy.required_technical_skills,
-        embedding_provider=ZeroEmbeddingProvider(),
-    )
+    requirements = classify_jd_requirements(job_description)
+    result = evaluate(["Python", "Microservices"], requirements.required_technical_skills)
 
-    assert result.required_skill_count == 5
-    assert result.score == 60.0
-    assert {match.keyword for match in result.match_result.matched} == {
-        "React.js",
-        "Microservices",
-        "API Integration",
-    }
-    assert result.match_result.missing == [
-        "Functional Programming",
-        "System Architecture",
-    ]
-    assert taxonomy.culture_signals == [
-        "Problem Solving",
-        "First Principles Thinking",
-        "Passion for Reliability",
-    ]
+    assert requirements.required_technical_skills == ["Python", "Microservices Architecture"]
+    assert requirements.preferred_technical_skills == ["Black"]
+    assert "enthusiastic" in requirements.feedback_only
+    assert "global" in requirements.feedback_only
+    assert "Payment Orchestration" in requirements.feedback_only
+    assert result.required_skill_count == 2
+    assert result.score == 100.0
+
+
+def test_fallback_extractor_drops_generic_jd_prose() -> None:
+    """The AI-outage path admits recognized taxonomy skills and nothing else."""
+    fallback = fallback_jd_extraction(
+        "Leading global payment team seeks an enthusiastic Python engineer with EC2 experience."
+    )
+    requirements = classify_jd_requirements(fallback)
+
+    assert requirements.required_technical_skills == ["Python", "Amazon EC2"]
+    assert requirements.feedback_only == []

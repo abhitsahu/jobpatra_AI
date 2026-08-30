@@ -1,0 +1,90 @@
+{
+  "version": "1.0.0",
+  "description": "JobPatra additions for skills absent from Tanova taxonomy v1.4.11. These records use the Tanova skill schema and remain data-only; no alias or category rules are embedded in application code.",
+  "skills": [
+    {
+      "id": "fastapi",
+      "canonical_name": "FastAPI",
+      "aliases": ["Fast API"],
+      "category": "technology",
+      "subcategory": "backend_frameworks",
+      "tags": ["python", "backend", "api", "framework"],
+      "parent_skills": [],
+      "child_skills": ["pydantic"],
+      "related_skills": ["pydantic"],
+      "transferability": {"pydantic": 0.9}
+    },
+    {
+      "id": "pydantic",
+      "canonical_name": "Pydantic",
+      "aliases": [],
+      "category": "technology",
+      "subcategory": "backend_frameworks",
+      "tags": ["python", "validation", "backend"],
+      "parent_skills": ["fastapi"],
+      "child_skills": [],
+      "related_skills": ["fastapi"],
+      "transferability": {"fastapi": 0.9}
+    },
+    {
+      "id": "amazon_ec2",
+      "canonical_name": "Amazon EC2",
+      "aliases": ["EC2", "AWS EC2"],
+      "category": "technology",
+      "subcategory": "cloud",
+      "tags": ["cloud", "aws", "compute"],
+      "parent_skills": ["aws"],
+      "child_skills": [],
+      "related_skills": [],
+      "transferability": {}
+    },
+    {
+      "id": "amazon_rds",
+      "canonical_name": "Amazon RDS",
+      "aliases": ["RDS", "AWS RDS"],
+      "category": "technology",
+      "subcategory": "cloud",
+      "tags": ["cloud", "aws", "database"],
+      "parent_skills": ["aws"],
+      "child_skills": [],
+      "related_skills": [],
+      "transferability": {}
+    },
+    {
+      "id": "amazon_s3",
+      "canonical_name": "Amazon S3",
+      "aliases": ["S3", "AWS S3"],
+      "category": "technology",
+      "subcategory": "cloud",
+      "tags": ["cloud", "aws", "storage"],
+      "parent_skills": ["aws"],
+      "child_skills": [],
+      "related_skills": [],
+      "transferability": {}
+    },
+    {
+      "id": "black",
+      "canonical_name": "Black",
+      "aliases": ["Black formatter", "Python Black"],
+      "category": "technology",
+      "subcategory": "tools",
+      "tags": ["python", "formatter", "tooling"],
+      "parent_skills": [],
+      "child_skills": [],
+      "related_skills": [],
+      "transferability": {}
+    },
+    {
+      "id": "mypy",
+      "canonical_name": "Mypy",
+      "aliases": ["MyPy", "mypy type checker"],
+      "category": "technology",
+      "subcategory": "tools",
+      "tags": ["python", "type-checking", "tooling"],
+      "parent_skills": [],
+      "child_skills": [],
+      "related_skills": [],
+      "transferability": {}
+    }
+  ]
+}

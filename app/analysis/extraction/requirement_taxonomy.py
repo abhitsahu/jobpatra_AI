@@ -1,9 +1,8 @@
-"""Classify extracted ATS entities into score-bearing requirement groups.
+"""Route extracted entities through the taxonomy-backed ATS scoring boundary.
 
-The LLM extraction layer supplies candidate entities. This module makes the
-scoring boundary deterministic: explicit technical requirements are scored,
-while culture signals are retained for feedback without diluting technical
-coverage scores.
+Only recognized, score-bearing technical skills enter the required-skill and
+keyword denominators. Tools are retained as preferred evidence and unknown,
+soft-skill, culture, and business-language terms remain feedback-only.
 """
 
 from __future__ import annotations
@@ -11,20 +10,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.analysis.extraction import skill_extractor
-from app.analysis.matching.synonym_map import SYNONYMS
+from app.analysis.extraction import keyword_extractor
 from app.schemas.extraction import JDExtraction, ResumeExtraction
+from app.services.taxonomy_service import get_taxonomy_service
 
-
-_CULTURE_SIGNALS = frozenset(
-    {
-        "first principles thinking",
-        "passion for reliability",
-        "enthusiasm for framework architecture",
-        "problem solving",
-        "problem-solving",
-    }
-)
 
 _PREFERRED_CONTEXT = re.compile(
     r"\b(?:preferred|nice\s+to\s+have|bonus|plus|desirable)\b", re.IGNORECASE
@@ -32,106 +21,104 @@ _PREFERRED_CONTEXT = re.compile(
 _EXPERIENCE_REQUIREMENT = re.compile(
     r"\b(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?)\b", re.IGNORECASE
 )
-_UNSAFE_SHORT_ALIASES = frozenset({"ai", "dl", "es", "go", "js", "ml", "np", "pd", "rb", "sh", "tf", "ts"})
 
 
 @dataclass(frozen=True)
 class JDRequirementTaxonomy:
-    """Score-bearing and feedback-only requirements extracted from a JD."""
+    """Taxonomy-routed JD requirements with non-scoring feedback preserved."""
 
     required_technical_skills: list[str]
     preferred_technical_skills: list[str]
-    domain_terms: list[str]
+    feedback_only: list[str]
     culture_signals: list[str]
 
     @property
+    def domain_terms(self) -> list[str]:
+        """Compatibility alias for the former score-bearing domain bucket."""
+        return []
+
+    @property
     def keyword_requirements(self) -> list[str]:
-        """Return technical/domain keywords used by general keyword coverage."""
-        return _unique_terms(
-            self.required_technical_skills,
-            self.preferred_technical_skills,
-            self.domain_terms,
-        )
+        """Return the only JD terms allowed into keyword-score coverage."""
+        return self.required_technical_skills
 
 
 def classify_jd_requirements(extraction: JDExtraction) -> JDRequirementTaxonomy:
-    """Split an LLM JD extraction into technical and feedback-only groups."""
-    required_technical_skills: list[str] = []
-    preferred_technical_skills: list[str] = []
-    domain_terms: list[str] = []
-    culture_signals = list(extraction.required_soft_skills)
+    """Classify JD entities using taxonomy categories rather than heuristics."""
+    required: list[str] = []
+    preferred: list[str] = []
+    feedback: list[str] = []
 
     for term in extraction.required_hard_skills:
-        if _normalise(term) in _CULTURE_SIGNALS:
-            culture_signals.append(term)
-        else:
-            required_technical_skills.append(term)
-
+        _route_term(term, required, preferred, feedback)
     for term in extraction.preferred_hard_skills:
-        if _normalise(term) in _CULTURE_SIGNALS:
-            culture_signals.append(term)
-        else:
-            preferred_technical_skills.append(term)
-
+        _route_term(term, required, preferred, feedback)
     for term in extraction.domain_terms:
-        if _normalise(term) in _CULTURE_SIGNALS:
-            culture_signals.append(term)
-        else:
-            domain_terms.append(term)
+        _route_term(term, required, preferred, feedback)
+    for term in extraction.required_soft_skills:
+        feedback.append(term.strip())
 
+    feedback = _unique_terms(feedback)
     return JDRequirementTaxonomy(
-        required_technical_skills=_unique_terms(required_technical_skills),
-        preferred_technical_skills=_unique_terms(preferred_technical_skills),
-        domain_terms=_unique_terms(domain_terms),
-        culture_signals=_unique_terms(culture_signals),
+        required_technical_skills=_unique_terms(required),
+        preferred_technical_skills=_unique_terms(preferred),
+        feedback_only=feedback,
+        culture_signals=feedback,
     )
 
 
 def resume_technical_evidence(extraction: ResumeExtraction) -> list[str]:
-    """Return explicit technical skills and domain concepts from a resume."""
-    return _unique_terms(extraction.hard_skills, extraction.domain_terms)
+    """Return normalized, recognized technical evidence from a resume."""
+    taxonomy = get_taxonomy_service()
+    terms = [*extraction.hard_skills, *extraction.domain_terms]
+    return _unique_terms(
+        [taxonomy.normalize(term) for term in terms if taxonomy.get_category(term) != "unknown"]
+    )
 
 
 def fallback_resume_extraction(text: str) -> ResumeExtraction:
-    """Build explicit technical resume evidence without an LLM.
-
-    This fallback deliberately uses only the maintained skills dictionary and
-    synonym dictionary. It never turns general prose into ATS requirements.
-    """
-    skills = [match.canonical for match in skill_extractor.extract(text).skills]
-    terms = _detect_technical_terms(text)
-    return ResumeExtraction(hard_skills=_unique_terms(skills, terms))
+    """Build resume evidence exclusively from taxonomy-recognized skills."""
+    return ResumeExtraction(hard_skills=keyword_extractor.extract(text))
 
 
 def fallback_jd_extraction(text: str) -> JDExtraction:
-    """Build a technical-only JD extraction when Hybrid AI is unavailable."""
+    """Build a no-fluff JD extraction from taxonomy-recognized skills only."""
+    taxonomy = get_taxonomy_service()
     required: list[str] = []
     preferred: list[str] = []
-    domain_terms: list[str] = []
 
     for line in text.splitlines() or [text]:
-        line_terms = _detect_technical_terms(line)
-        if _PREFERRED_CONTEXT.search(line):
-            preferred.extend(line_terms)
-        else:
-            required.extend(line_terms)
+        destination = preferred if _PREFERRED_CONTEXT.search(line) else required
+        destination.extend(taxonomy.recognized_terms(line))
 
-    # A one-line JD has no meaningful line boundaries; preserve the detected
-    # technical terms as required rather than falling back to arbitrary tokens.
     if not required and not preferred:
-        required.extend(_detect_technical_terms(text))
-
-    for term in _unique_terms(required, preferred):
-        if term.lower() in {"distributed systems", "payment orchestration", "multi-dc architecture", "self-healing systems", "traffic routing", "anomaly detection", "payment tokenization", "fraud & risk management", "edge computing", "low-code/no-code", "api integrations", "infrastructure as code"}:
-            domain_terms.append(term)
+        required.extend(taxonomy.recognized_terms(text))
 
     return JDExtraction(
         required_hard_skills=_unique_terms(required),
         preferred_hard_skills=_unique_terms(preferred),
-        domain_terms=_unique_terms(domain_terms),
         min_experience=_fallback_min_experience(text),
         required_education_level=_fallback_education_requirement(text),
     )
+
+
+def _route_term(
+    term: str,
+    required: list[str],
+    preferred: list[str],
+    feedback: list[str],
+) -> None:
+    """Route one LLM entity without allowing unknown values into scoring."""
+    cleaned = term.strip()
+    if not cleaned:
+        return
+    taxonomy = get_taxonomy_service()
+    if taxonomy.is_required_skill(cleaned):
+        required.append(taxonomy.normalize(cleaned))
+    elif taxonomy.is_preferred_skill(cleaned):
+        preferred.append(taxonomy.normalize(cleaned))
+    else:
+        feedback.append(cleaned)
 
 
 def _unique_terms(*groups: list[str]) -> list[str]:
@@ -141,34 +128,11 @@ def _unique_terms(*groups: list[str]) -> list[str]:
     for group in groups:
         for term in group:
             cleaned = term.strip()
-            normalised = _normalise(cleaned)
-            if cleaned and normalised not in seen:
-                seen.add(normalised)
+            normalized = " ".join(cleaned.casefold().split())
+            if cleaned and normalized not in seen:
+                seen.add(normalized)
                 result.append(cleaned)
     return result
-
-
-def _normalise(term: str) -> str:
-    """Normalise a requirement for taxonomy membership and de-duplication."""
-    return " ".join(term.lower().split())
-
-
-def _detect_technical_terms(text: str) -> list[str]:
-    """Find only explicitly named terms from maintained technical dictionaries."""
-    detected: list[str] = []
-    lowered = text.lower()
-    for canonical, aliases in SYNONYMS.items():
-        canonical_normalised = _normalise(canonical)
-        if canonical_normalised in _CULTURE_SIGNALS:
-            continue
-        for alias in aliases:
-            normalised_alias = _normalise(alias)
-            if normalised_alias in _UNSAFE_SHORT_ALIASES:
-                continue
-            if re.search(rf"(?<![a-z0-9+#.]){re.escape(normalised_alias)}(?![a-z0-9+#.])", lowered):
-                detected.append(canonical)
-                break
-    return _unique_terms(detected)
 
 
 def _fallback_min_experience(text: str) -> float:
@@ -179,7 +143,7 @@ def _fallback_min_experience(text: str) -> float:
 
 def _fallback_education_requirement(text: str) -> str:
     """Return the highest explicit degree requirement found in fallback JD text."""
-    lowered = text.lower()
+    lowered = text.casefold()
     if re.search(r"\b(?:ph\.?d|doctorate|doctoral)\b", lowered):
         return "phd"
     if re.search(r"\b(?:master'?s|m\.?(?:sc|tech|s|eng)|mba)\b", lowered):

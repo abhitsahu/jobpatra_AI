@@ -4,6 +4,7 @@ Deterministic. No AI. No network.
 """
 
 from app.analysis.scoring import skills_score
+import pytest
 
 
 class TestBasicScoring:
@@ -11,7 +12,7 @@ class TestBasicScoring:
         """4 resume / 5 required → 80.0."""
         resume = ["Python", "Docker", "React", "AWS"]
         required = ["Python", "Docker", "React", "Redis", "AWS"]
-        assert skills_score.calculate(resume, required) == 80.0
+        assert skills_score.calculate(resume, required) == pytest.approx((3.4 / 4.4) * 100.0)
 
     def test_all_required_skills_present(self) -> None:
         resume = ["Python", "Docker"]
@@ -36,13 +37,13 @@ class TestBasicScoring:
             embedding_provider=None,
         )
 
-        assert result.required_skill_count == 3
-        assert result.score == (2 / 3) * 100.0
+        assert result.required_skill_count == 2
+        assert result.score == 100.0
         assert [match.keyword for match in result.match_result.matched] == [
             "React.js",
             "Microservices",
         ]
-        assert result.match_result.missing == ["Functional Programming"]
+        assert result.match_result.missing == []
 
 
 class TestCaseInsensitivity:

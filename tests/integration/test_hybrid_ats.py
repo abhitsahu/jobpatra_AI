@@ -5,8 +5,8 @@ Tests:
      deterministic matcher & scoring engine.
   2. Fallback path: AI extraction fails (raises AIGenerationError) and the
      service gracefully falls back to naive extractors without crashing.
-  3. Non-technical role domain terms: HR domain terms ("Talent Acquisition")
-     extract and match cleanly.
+  3. Non-taxonomy business and culture terms remain feedback-only rather than
+     silently diluting the technical ATS denominator.
 """
 
 from unittest.mock import patch
@@ -62,10 +62,43 @@ def test_hybrid_ai_extraction_success_path(mock_explain_score):
         response = ats_service.analyze(request)
 
         assert response.overall_score > 0.0
-        assert response.keyword_score == 71.43  # 5 matched out of 7 total JD items (71.43%)
+        assert response.keyword_score == 75.0  # 3 matched of 4 taxonomy-required JD skills
         matched_words = [m.keyword for m in response.matched_keywords]
         assert "Python" in matched_words
         assert "FastAPI" in matched_words
+
+
+def test_hybrid_merge_keeps_skills_section_terms_omitted_by_ai(mock_explain_score):
+    """Explicit Skills-section terms survive even when Gemini does not return them."""
+    mock_resume_ext = ResumeExtraction(hard_skills=["Python"])
+    mock_jd_ext = JDExtraction(required_hard_skills=["HTML", "CSS", "React"])
+
+    with (
+        patch("app.services.ats_service.extract_resume_entities", return_value=mock_resume_ext),
+        patch("app.services.ats_service.extract_jd_entities", return_value=mock_jd_ext),
+    ):
+        entities = ats_service._extract_entities_hybrid(
+            resume_clean="Resume text",
+            jd_clean="Frontend Developer requires HTML, CSS, and React.",
+            skills_section="Frontend: HTML, CSS, React",
+        )
+
+    assert {"HTML", "CSS", "React", "Python"}.issubset(entities.resume_skills)
+
+
+def test_hybrid_merge_supports_another_comma_separated_skills_section(mock_explain_score):
+    """The merge is data-driven for skills omitted from any AI response."""
+    with (
+        patch("app.services.ats_service.extract_resume_entities", return_value=ResumeExtraction()),
+        patch("app.services.ats_service.extract_jd_entities", return_value=JDExtraction()),
+    ):
+        entities = ats_service._extract_entities_hybrid(
+            resume_clean="Another candidate resume",
+            jd_clean="Platform Engineer",
+            skills_section="Kubernetes, Docker",
+        )
+
+    assert entities.resume_skills == ["Kubernetes", "Docker"]
 
 
 def test_hybrid_ai_extraction_fallback_path(mock_explain_score):
@@ -92,8 +125,8 @@ def test_hybrid_ai_extraction_fallback_path(mock_explain_score):
         assert response.processing_time_ms > 0.0
 
 
-def test_non_technical_hr_role_domain_terms(mock_explain_score):
-    """Verify that non-technical roles (HR) extract and match domain_terms correctly."""
+def test_unknown_hr_domain_terms_are_excluded_from_technical_scoring(mock_explain_score):
+    """Business terms outside the taxonomy must not become technical requirements."""
     mock_resume_ext = ResumeExtraction(
         hard_skills=["Workday", "Excel"],
         soft_skills=["Interpersonal Communication"],
@@ -126,7 +159,6 @@ def test_non_technical_hr_role_domain_terms(mock_explain_score):
 
         response = ats_service.analyze(request)
 
-        matched_words = [m.keyword for m in response.matched_keywords]
-        assert "Talent Acquisition" in matched_words
-        assert "Employee Relations" in matched_words
-        assert response.keyword_score > 0.0
+        assert response.matched_keywords == []
+        assert response.missing_keywords == []
+        assert response.keyword_score == 0.0

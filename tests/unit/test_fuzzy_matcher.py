@@ -69,8 +69,7 @@ class TestFuzzyMatchTypeViaOrchestrator:
         """'Javascript' fails exact and synonym, then passes fuzzy."""
         result = keyword_matcher.match(["Javascript"], ["JavaScript"])
         # "javascript" vs "javascript" → will actually be SYNONYM or EXACT
-        # depending on synonym_map. Let's use a clear typo not in any alias.
-        # Use a deliberate typo that is NOT in synonym_map.
+        # Use a deliberate typo that is not a recognized taxonomy alias.
         result2 = keyword_matcher.match(["Dockerr"], ["Docker"])
         match_types = [m.matchType for m in result2.matched]
         assert "FUZZY" in match_types

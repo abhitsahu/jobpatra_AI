@@ -1,103 +1,102 @@
-"""Keyword extractor — pull important terms from plain text.
+"""Extract taxonomy-recognized skills, prioritizing structured Skills sections.
 
-This module has ONE responsibility: identify meaningful tokens (words and
-short multi-word phrases) from any text — resume or job description.
-
-It does NOT:
-  - classify or compare keywords
-  - score keywords
-  - call AI or external services
-  - look up a skills reference list (that is skill_extractor's job)
-
-Algorithm:
-  1. Tokenise the text into words using a simple regex word-boundary split.
-  2. Filter out a curated stop-word list (function words, prepositions,
-     common verbs, etc.) that carry no information value.
-  3. Deduplicate while preserving the first-seen order.
-  4. Return a list of unique, non-trivial tokens.
-
-All functions are pure. No I/O. No state. No FastAPI imports.
+The deterministic fallback may receive imperfect PDF text. It first scans a
+``SKILLS`` block and labelled rows such as ``Frontend: HTML, CSS`` so explicit
+resume skills survive parsing. Unknown prose is still excluded by taxonomy
+normalization and cannot leak into ATS score denominators.
 """
+
+from __future__ import annotations
 
 import re
 
-# ---------------------------------------------------------------------------
-# Stop-words — words that add no keyword value
-# ---------------------------------------------------------------------------
+from app.services.taxonomy_service import get_taxonomy_service
 
-_STOP_WORDS: frozenset[str] = frozenset(
-    {
-        # Articles / determiners
-        "a", "an", "the",
-        # Prepositions
-        "at", "by", "for", "from", "in", "into", "of", "on", "onto",
-        "out", "over", "to", "under", "up", "with", "about", "as",
-        "between", "through", "during", "before", "after", "above",
-        "below", "within", "without",
-        # Conjunctions
-        "and", "but", "or", "nor", "so", "yet", "both", "either",
-        "neither", "not", "although", "because", "since", "unless",
-        "while", "if", "than",
-        # Pronouns
-        "i", "me", "my", "we", "us", "our", "you", "your", "he", "him",
-        "his", "she", "her", "it", "its", "they", "them", "their",
-        "this", "that", "these", "those",
-        # Common verbs with no keyword value
-        "am", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would",
-        "shall", "should", "may", "might", "must", "can", "could",
-        "need", "used",
-        # Resume filler words
-        "responsible", "responsibilities", "role", "position",
-        "experience", "work", "worked", "working",
-        "team", "teams", "member", "members",
-        "strong", "good", "excellent", "great", "ability", "able",
-        "skills", "knowledge", "understanding", "proficient",
-        "various", "multiple", "different", "other", "also", "including",
-        "well", "using", "use", "make", "made", "help", "helped",
-        "ensure", "ensured", "support", "supported", "manage", "managed",
-        "lead", "led", "build", "built", "create", "created",
-        "develop", "developed", "implement", "implemented",
-        "maintain", "maintained", "improve", "improved",
-        "provide", "provided", "review", "reviewed",
-    }
+
+_SKILLS_HEADER = re.compile(
+    r"^\s*(?:technical\s+)?skills?(?:\s*(?:&|and)\s*(?:technologies|tools))?\s*:?\s*$",
+    re.IGNORECASE,
 )
-
-# Tokenisation: keep alphanumeric runs and dots (for "Node.js", "ASP.NET")
-_TOKEN_RE: re.Pattern[str] = re.compile(r"[A-Za-z][A-Za-z0-9.#+\-_]*")
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+_SECTION_HEADER = re.compile(r"^\s*[A-Z][A-Z\s&/-]{2,}:?\s*$")
+_CATEGORY_SKILL_ROW = re.compile(
+    r"^\s*(?:[-*•◦]\s*)?(?:frontend|backend|full[ -]?stack|programming(?:\s+languages)?|"
+    r"databases?|cloud(?:\s*&\s*devops)?|devops|integrations?(?:\s*&\s*tools?)?|"
+    r"tools?|frameworks?|libraries|ai|ml)\s*(?:&|and)?\s*[\w -]*\s*:\s*(.+)$",
+    re.IGNORECASE,
+)
+_BULLET = re.compile(r"^\s*(?:[-*•◦]\s*)+")
+_ITEM_SEPARATOR = re.compile(r"\s*(?:,|\||;|•)\s*")
 
 
 def extract(text: str) -> list[str]:
-    """Extract unique, meaningful keywords from plain text.
+    """Return canonical skills, including comma-separated Skills-section items."""
+    taxonomy = get_taxonomy_service()
+    structured_items = _extract_structured_skill_items(text)
+    structured_skills = _normalize_items(structured_items)
+    # Keep broad text scanning as a secondary source for unstructured resumes.
+    return _unique_terms(structured_skills, taxonomy.recognized_terms(text))
 
-    Tokenises ``text``, removes stop-words and very short tokens (≤ 1 char),
-    deduplicates case-insensitively while preserving the first-seen casing,
-    and returns the result in first-seen order.
 
-    Args:
-        text: Any plain text — resume section body, job description, etc.
+def extract_from_skills_section(skills_text: str) -> list[str]:
+    """Extract canonical skills from a raw ``ResumeSection.skills`` value.
 
-    Returns:
-        Ordered list of unique keyword strings.  May be empty if the text
-        contains only stop-words or punctuation.
+    ``section_splitter`` removes the heading itself, so this function treats
+    every line as Skills-section content. Comma-separated items and labelled
+    category rows are both supported.
     """
-    tokens = _TOKEN_RE.findall(text)
-    seen_lower: set[str] = set()
-    keywords: list[str] = []
+    structured_items = _extract_structured_skill_items(skills_text, in_skills_section=True)
+    return _unique_terms(_normalize_items(structured_items))
 
-    for token in tokens:
-        if len(token) <= 1:
-            continue
-        if token.lower() in _STOP_WORDS:
-            continue
-        if token.lower() in seen_lower:
-            continue
-        seen_lower.add(token.lower())
-        keywords.append(token)
 
-    return keywords
+def _extract_structured_skill_items(
+    text: str,
+    in_skills_section: bool = False,
+) -> list[str]:
+    """Read Skills-section lines and category rows from parsed resume text."""
+    items: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _SKILLS_HEADER.match(stripped):
+            in_skills_section = True
+            continue
+        if in_skills_section and _SECTION_HEADER.match(stripped):
+            in_skills_section = False
+
+        category_match = _CATEGORY_SKILL_ROW.match(stripped)
+        if category_match is not None:
+            items.extend(_split_items(category_match.group(1)))
+            continue
+        if in_skills_section:
+            items.extend(_split_items(_BULLET.sub("", stripped)))
+
+    return items
+
+
+def _normalize_items(items: list[str]) -> list[str]:
+    """Keep only taxonomy-recognized explicit Skills-section items."""
+    taxonomy = get_taxonomy_service()
+    return [
+        taxonomy.normalize(item)
+        for item in items
+        if taxonomy.get_category(item) != "unknown"
+    ]
+
+
+def _split_items(value: str) -> list[str]:
+    """Split a skills row while preserving multi-word skill names."""
+    return [item.strip() for item in _ITEM_SEPARATOR.split(value) if item.strip()]
+
+
+def _unique_terms(*groups: list[str]) -> list[str]:
+    """Return stable canonical terms without duplicates."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for term in group:
+            key = " ".join(term.casefold().split())
+            if term and key not in seen:
+                seen.add(key)
+                result.append(term)
+    return result
