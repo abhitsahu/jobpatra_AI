@@ -26,17 +26,17 @@ async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events."""
     setup_logging()
     logger.info(
-        "%s starting — env=%s host=%s port=%s",
-        settings.APP_NAME,
-        settings.ENV,
-        settings.HOST,
-        settings.PORT,
+        "app.startup",
+        app_name=settings.APP_NAME,
+        env=settings.ENV,
+        host=settings.HOST,
+        port=settings.PORT,
     )
     initialize_taxonomy_service()
     initialize_shared_provider()
     yield
     clear_shared_provider()
-    logger.info("%s shutting down", settings.APP_NAME)
+    logger.info("app.shutdown", app_name=settings.APP_NAME)
 
 
 app = FastAPI(
